@@ -8,7 +8,7 @@ if (-not (Test-Path env:ICINGA2_BUILDPATH)) {
   $env:ICINGA2_BUILDPATH = '.\build'
 }
 
-if(-not (Test-Path "$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.template")) {
+if(-not (Test-Path ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.template")) {
 	throw "Could not find Chocolatey install script template. Abort."
 }
 
@@ -33,10 +33,10 @@ $chocoInstallScript = $chocoInstallScript.Replace("%CHOCO_32BIT_CHECKSUM%", "$($
 $chocoInstallScript = $chocoInstallScript.Replace("%CHOCO_64BIT_CHECKSUM%", "$($hashMSIpackage64.Hash)")
 Write-Output $chocoInstallScript
 
-Set-Content -Path "$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1" -Value $chocoInstallScript
+Set-Content -Path ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1" -Value $chocoInstallScript
 
-cd "$($env:ICINGA2_BUILDPATH)\choco"
+cd ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco"
 & "$($env:ProgramData)\chocolatey\choco.exe" "pack"
 cd "..\.."
 
-Move-Item -Path "$($env:ICINGA2_BUILDPATH)\choco\*.nupkg" -Destination "$($env:ICINGA2_BUILDPATH)"
+Move-Item -Path ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco\*.nupkg" -Destination "$($env:ICINGA2_BUILDPATH)"
