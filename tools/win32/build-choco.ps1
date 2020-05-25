@@ -15,18 +15,18 @@ if(-not (Test-Path "$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.templa
 $chocoInstallScriptTemplatePath = "$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.template"
 $chocoInstallScript = Get-Content $chocoInstallScriptTemplatePath
 
-if(-not (Test-Path "$($env:ICINGA2_BUILDPATH)\*-x86.msi")) {
+if(-not (Test-Path ".\*-x86.msi")) {
 	throw "Could not find Icinga 2 32 bit MSI package. Abort."
 }
 
-$hashMSIpackage32 =  Get-FileHash "$($env:ICINGA2_BUILDPATH)\*-x86.msi"
+$hashMSIpackage32 =  Get-FileHash ".\*-x86.msi"
 Write-Output "File Hash for 32 bit MSI package: $($hashMSIpackage32.Hash)."
 
-if(-not (Test-Path "$($env:ICINGA2_BUILDPATH)\*-x86_64.msi")) {
+if(-not (Test-Path ".\*-x86_64.msi")) {
 	throw "Could not find Icinga 2 64 bit MSI package. Abort."
 }
 
-$hashMSIpackage64 =  Get-FileHash "$($env:ICINGA2_BUILDPATH)\*-x86_64.msi"
+$hashMSIpackage64 =  Get-FileHash ".\*-x86_64.msi"
 Write-Output "File Hash for 32 bit MSI package: $($hashMSIpackage64.Hash)"
 
 $chocoInstallScript = $chocoInstallScript.Replace("%CHOCO_32BIT_CHECKSUM%", "$($hashMSIpackage32.Hash)")
