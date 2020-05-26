@@ -12,7 +12,7 @@ if(-not (Test-Path ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.
 	throw "Could not find Chocolatey install script template. Abort."
 }
 
-$chocoInstallScriptTemplatePath = "$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.template"
+$chocoInstallScriptTemplatePath = ".\icinga2\$($env:ICINGA2_BUILDPATH)\choco\chocolateyInstall.ps1.template"
 $chocoInstallScript = Get-Content $chocoInstallScriptTemplatePath
 
 if(-not (Test-Path ".\*-x86.msi")) {
