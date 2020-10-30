@@ -2816,11 +2816,9 @@ smart_raw_list         | **Optional.** List (comma separated, without spaces!) o
 smart_exclude_list     | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) from checks, but still appear in perfdata.
 smart_exclude_all_list | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) **completely** from checks and perfdata.
 smart_bad              | **Optional.** Threshold value (integer) when to warn for N bad entries (ATA: Current Pending Sector, SCSI: Grown defect list). Note: Deprecated for ATA drives, use `smart_warn` instead. Continue to use this for SCSI drives.
-smart_warn             | **Optional.** Comma separated list of thresholds for ATA drives (e.g. `'Reallocated_Sector_Ct=10,Current_Pending_Sector=62'`).
+smart_warn             | **Optional.** Comma separated list of thresholds for ATA drives (e.g. `"Reallocated_Sector_Ct=10,Current_Pending_Sector=62"`).
 smart_selftest         | **Optional.** If set to true, additionally check SMART's selftest log for errors.
 smart_quiet            | **Optional.** If set to true, only show failing drive(s) when faults are detected (only affects output when used with `smart_global`).
-
-Either smart_device (-d) or smart_global (-g) is required. smart_interface (-i) is always required.
 
 
 ### IcingaCLI <a id="plugin-contrib-icingacli"></a>
