@@ -2833,10 +2833,9 @@ Custom variables passed as [command parameters](03-monitoring-basics.md#command-
 
 Name                   | Description
 -----------------------|-----------------------------------------------------------------------
-smart_device           | **Required.** Path to physical block device to be SMART monitored, e.g. /dev/sda.
+smart_device           | **Required.** Path to physical block device to be SMART monitored, e.g. /dev/sda. In combination with `smart_device_is_glob` (set to true) can also be used to monitor multiple drives at the same time (e.g. "/dev/sd[a-z]").
 smart_interface        | **Optional.** Drive's interface type, must be one of: auto, ata, scsi, nvme, 3ware,N, areca,N, hpt,L/M/N, cciss,N, megaraid,N.
-smart_glob             | **Optional** A glob expression of physical devices to be monitored, eg -g "/dev/sd[a-z]".
-smart_device_is_glob   | **Optional.** If set to true, will use
+smart_device_is_glob   | **Optional.** If set to true, will use `smart_device` as glob expression (e.g. "/dev/sd[a-z]"). Allows to monitor multiple drives. 
 smart_raw_list         | **Optional.** List (comma separated, without spaces!) of SMART attributes to check for their raw values.
 smart_exclude_list     | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) from checks, but still appear in perfdata.
 smart_exclude_all_list | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) **completely** from checks and perfdata.
@@ -2845,6 +2844,7 @@ smart_warn             | **Optional.** Comma separated list of thresholds for AT
 smart_selftest         | **Optional.** If set to true, additionally check SMART's selftest log for errors.
 smart_ssd_lifetime     | **Optional.** If set to true, additionally check SSD attribute 'Percent_Lifetime_Remain'.
 smart_quiet            | **Optional.** If set to true, only show failing drive(s) when faults are detected (only affects output when used with `smart_global`).
+smart_skip_self_assessment | **Optional.** If set to true, skip the SMART self assessment health check (not recommended).
 
 
 ### IcingaCLI <a id="plugin-contrib-icingacli"></a>
