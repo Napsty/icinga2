@@ -63,12 +63,17 @@ class Downtime : ConfigObject < DowntimeNameComposer
 	[config] Timestamp duration;
 	[config] String triggered_by;
 	[config] String scheduled_by;
+	[config] String parent;
 	[state] Array::Ptr triggers {
 		default {{{ return new Array(); }}}
 	};
 	[state] int legacy_id;
-	[state] bool was_cancelled;
+	[state] Timestamp remove_time;
+	[no_storage] bool was_cancelled {
+		get {{{ return GetRemoveTime() > 0; }}}
+	};
 	[config] String config_owner;
+	[config] String config_owner_hash;
 	[config] String authoritative_zone;
 
 	[no_user_view, no_user_modify] String removed_by;

@@ -148,7 +148,7 @@ and `accept_config` can be configured here.
 
 In order to use the `api` feature you need to enable it and restart Icinga 2.
 
-```
+```bash
 icinga2 feature enable api
 ```
 
@@ -605,6 +605,13 @@ The setup wizard fetches the parent node's certificate and ask
 you to verify this information. This is to prevent MITM attacks or
 any kind of untrusted parent relationship.
 
+You can verify the fingerprint by running the following command on the node to connect to:
+
+```bash
+openssl x509 -noout -fingerprint -sha256 -in \
+ "/var/lib/icinga2/certs/$(hostname --fqdn).crt"
+```
+
 Note: The certificate is not fetched if you have chosen not to connect
 to the parent node.
 
@@ -724,7 +731,7 @@ The setup wizard will ensure that the following steps are taken:
 
 * Enable the `api` feature.
 * Create a certificate signing request (CSR) for the local node.
-* Request a signed certificate i(optional with the provided ticket number) on the master node.
+* Request a signed certificate (optional with the provided ticket number) on the master node.
 * Allow to verify the parent node's certificate.
 * Store the signed agent/satellite certificate and ca.crt in `/var/lib/icinga2/certs`.
 * Update the `zones.conf` file with the new zone hierarchy.
@@ -791,7 +798,7 @@ after the installation. Select the check box to proceed.
 #### Agent Setup on Windows: Configuration Wizard <a id="distributed-monitoring-setup-agent-windows-configuration-wizard"></a>
 
 On a fresh installation the setup wizard guides you through the initial configuration.
-It also provides a mechanism to send a certificate request to the [CSR signing master](distributed-monitoring-setup-sign-certificates-master).
+It also provides a mechanism to send a certificate request to the [CSR signing master](06-distributed-monitoring.md#distributed-monitoring-setup-sign-certificates-master).
 
 The following configuration details are required:
 
@@ -1669,14 +1676,14 @@ The secondary master waits for connection attempts from the first master,
 and therefore does not try to connect to it again.
 
 ```
-[root@icinga2-master1.localdomain /]# vim /etc/icinga2/zones.conf
+[root@icinga2-master2.localdomain /]# vim /etc/icinga2/zones.conf
 
 object Endpoint "icinga2-master1.localdomain" {
-  // That's us
+  // The first master already connects to us
 }
 
 object Endpoint "icinga2-master2.localdomain" {
-  // The first master already connects to us
+  // That's us
 }
 
 object Zone "master" {
@@ -1912,6 +1919,12 @@ endpoint from the satellite zones.
 >
 > It can get complicated, so grab a pen and paper and bring your thoughts to life.
 > Play around with a test setup before using it in a production environment!
+
+There are various reasons why you might want to have satellites in your environment. The following list explains the more common ones.
+
+* Monitor remote locations. Besides reducing connections and traffic between different locations this setup also helps when the network connection to the remote network is lost. Satellites will keep checking and collecting data on their own and will send their check results when the connection is restored.
+* Reduce connections between security zones. Satellites in a different zone (e.g. DMZ) than your masters will help reduce connections through firewalls.
+* Offload resource hungry checks to other hosts. In very big setups running lots of plugins on your masters or satellites might have a significant impact on the performance during times of high load. You can introduce another level of satellites just to run these plugins and send their results to the upstream hosts.
 
 Best practice is to run the database backend on a dedicated server/cluster and
 only expose a virtual IP address to Icinga and the IDO feature. By default, only one
@@ -2988,7 +3001,7 @@ By default, the following features provide advanced HA functionality:
 * [Elasticsearch](09-object-types.md#objecttype-elasticsearchwriter)
 * [Gelf](09-object-types.md#objecttype-gelfwriter)
 * [Graphite](09-object-types.md#objecttype-graphitewriter)
-* [InfluxDB](09-object-types.md#objecttype-influxdbwriter)
+* [InfluxDB](09-object-types.md#objecttype-influxdb2writer) (v1 and v2)
 * [OpenTsdb](09-object-types.md#objecttype-opentsdbwriter)
 * [Perfdata](09-object-types.md#objecttype-perfdatawriter) (for PNP)
 
@@ -2999,8 +3012,8 @@ have the `checker` feature enabled.
 
 Example:
 
-```
-# icinga2 feature enable checker
+```bash
+icinga2 feature enable checker
 ```
 
 All nodes in the same zone load-balance the check execution. If one instance shuts down,
@@ -3013,8 +3026,8 @@ have the `notification` feature enabled.
 
 Example:
 
-```
-# icinga2 feature enable notification
+```bash
+icinga2 feature enable notification
 ```
 
 Notifications are load-balanced amongst all nodes in a zone. By default this functionality
@@ -3030,8 +3043,8 @@ have the DB IDO feature enabled.
 
 Example DB IDO MySQL:
 
-```
-# icinga2 feature enable ido-mysql
+```bash
+icinga2 feature enable ido-mysql
 ```
 
 By default the DB IDO feature only runs on one node. All other nodes in the same zone disable
@@ -3300,10 +3313,10 @@ be passed (defaults to the FQDN).
 
   Parameter           | Description
   --------------------|--------------------
-  Common name (CN)    | **Optional.** Specified with the `--cn` parameter. By convention this should be the host's FQDN. Defaults to the FQDN.
-  Zone name           | **Optional.** Specified with the `--zone` parameter. Defaults to `master`.
-  Listen on           | **Optional.** Specified with the `--listen` parameter. Syntax is `host,port`.
-  Disable conf.d      | **Optional.** Specified with the `disable-confd` parameter. If provided, this disables the `include_recursive "conf.d"` directive and adds the `api-users.conf` file inclusion to `icinga2.conf`. Available since v2.9+. Not set by default for compatibility reasons with Puppet, Ansible, Chef, etc.
+  `--cn`              | **Optional.** Common name (CN). By convention this should be the host's FQDN. Defaults to the FQDN.
+  `--zone`            | **Optional.** Zone name. Defaults to `master`.
+  `--listen`          | **Optional.** Address to listen on. Syntax is `host,port`.
+  `--disable-confd`   | **Optional.** If provided, this disables the `include_recursive "conf.d"` directive and adds the `api-users.conf` file inclusion to `icinga2.conf`. Available since v2.9+. Not set by default for compatibility reasons with Puppet, Ansible, Chef, etc.
 
 Example:
 
@@ -3344,8 +3357,8 @@ Pass the following details to the `pki new-cert` CLI command:
 
   Parameter           | Description
   --------------------|--------------------
-  Common name (CN)    | **Required.** By convention this should be the host's FQDN.
-  Client certificate files   | **Required.** These generated files will be put into the specified location (--key and --file). By convention this should be using `/var/lib/icinga2/certs` as directory.
+  `--cn`              | **Required.** Common name (CN). By convention this should be the host's FQDN.
+  `--key`, `--file`   | **Required.** Client certificate files. These generated files will be put into the specified location. By convention this should be using `/var/lib/icinga2/certs` as directory.
 
 Example:
 
@@ -3366,8 +3379,8 @@ Pass the following details to the `pki save-cert` CLI command:
 
   Parameter           | Description
   --------------------|--------------------
-  Trusted parent certificate | **Required.** Store the parent's certificate file. Manually verify that you're trusting it.
-  Parent host         | **Required.** FQDN or IP address of the parent host.
+  `--trustedcert`     | **Required.** Store the parent's certificate file. Manually verify that you're trusting it.
+  `--host`            | **Required.** FQDN or IP address of the parent host.
 
 Request the master certificate from the master host (`icinga2-master1.localdomain`)
 and store it as `trusted-parent.crt`. Review it and continue.
@@ -3403,17 +3416,17 @@ Pass the following details to the `node setup` CLI command:
 
   Parameter           | Description
   --------------------|--------------------
-  Common name (CN)    | **Optional.** Specified with the `--cn` parameter. By convention this should be the host's FQDN.
-  Request ticket      | **Required.** Add the previously generated [ticket number](06-distributed-monitoring.md#distributed-monitoring-setup-csr-auto-signing).
-  Trusted parent certificate | **Required.** Trusted parent certificate file as connection verification (received via 'pki save-cert').
-  Parent host         | **Optional.** FQDN or IP address of the parent host. This is where the command connects for CSR signing. If not specified, you need to manually copy the parent's public CA certificate file into `/var/lib/icinga2/certs/ca.crt` in order to start Icinga 2.
-  Parent endpoint     | **Required.** Specify the parent's endpoint name.
-  Local zone name    | **Required.** Specify the agent/satellite zone name.
-  Parent zone name    | **Optional.** Specify the parent's zone name.
-  Accept config       | **Optional.** Whether this node accepts configuration sync from the master node (required for [config sync mode](06-distributed-monitoring.md#distributed-monitoring-top-down-config-sync)).
-  Accept commands     | **Optional.** Whether this node accepts command execution messages from the master node (required for [command endpoint mode](06-distributed-monitoring.md#distributed-monitoring-top-down-command-endpoint)).
-  Global zones        | **Optional.** Allows to specify more global zones in addition to `global-templates` and `director-global`.
-  Disable conf.d      | **Optional.** Specified with the `disable-confd` parameter. If provided, this disables the `include_recursive "conf.d"` directive in `icinga2.conf`. Available since v2.9+. Not set by default for compatibility reasons with Puppet, Ansible, Chef, etc.
+  `--cn`              | **Optional.** Common name (CN). By convention this should be the host's FQDN.
+  `--ticket`          | **Required.** Request ticket. Add the previously generated [ticket number](06-distributed-monitoring.md#distributed-monitoring-setup-csr-auto-signing).
+  `--trustedcert`     | **Required.** Trusted parent certificate file as connection verification (received via 'pki save-cert').
+  `--parent_host`     | **Optional.** FQDN or IP address of the parent host. This is where the command connects for CSR signing. If not specified, you need to manually copy the parent's public CA certificate file into `/var/lib/icinga2/certs/ca.crt` in order to start Icinga 2.
+  `--endpoint`        | **Required.** Specifies the parent's endpoint name.
+  `--zone`            | **Required.** Specifies the agent/satellite zone name.
+  `--parent_zone`     | **Optional.** Specifies the parent's zone name.
+  `--accept-config`   | **Optional.** Whether this node accepts configuration sync from the master node (required for [config sync mode](06-distributed-monitoring.md#distributed-monitoring-top-down-config-sync)).
+  `--accept-commands` | **Optional.** Whether this node accepts command execution messages from the master node (required for [command endpoint mode](06-distributed-monitoring.md#distributed-monitoring-top-down-command-endpoint)).
+  `--global_zones`    | **Optional.** Allows to specify more global zones in addition to `global-templates` and `director-global`.
+  `--disable-confd`   | **Optional.** If provided, this disables the `include_recursive "conf.d"` directive in `icinga2.conf`. Available since v2.9+. Not set by default for compatibility reasons with Puppet, Ansible, Chef, etc.
 
 > **Note**
 >

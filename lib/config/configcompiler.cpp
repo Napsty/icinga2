@@ -12,7 +12,7 @@
 using namespace icinga;
 
 std::vector<String> ConfigCompiler::m_IncludeSearchDirs;
-boost::mutex ConfigCompiler::m_ZoneDirsMutex;
+std::mutex ConfigCompiler::m_ZoneDirsMutex;
 std::map<String, std::vector<ZoneFragment> > ConfigCompiler::m_ZoneDirs;
 
 /**
@@ -136,8 +136,9 @@ std::unique_ptr<Expression> ConfigCompiler::HandleInclude(const String& relative
 	}
 
 	std::vector<std::unique_ptr<Expression> > expressions;
+	auto funcCallback = [&expressions, zone, package](const String& file) { CollectIncludes(expressions, file, zone, package); };
 
-	if (!Utility::Glob(includePath, std::bind(&ConfigCompiler::CollectIncludes, std::ref(expressions), _1, zone, package), GlobFile) && includePath.FindFirstOf("*?") == String::NPos) {
+	if (!Utility::Glob(includePath, funcCallback, GlobFile) && includePath.FindFirstOf("*?") == String::NPos) {
 		std::ostringstream msgbuf;
 		msgbuf << "Include file '" + path + "' does not exist";
 		BOOST_THROW_EXCEPTION(ScriptError(msgbuf.str(), debuginfo));
@@ -167,7 +168,9 @@ std::unique_ptr<Expression> ConfigCompiler::HandleIncludeRecursive(const String&
 		ppath = relativeBase + "/" + path;
 
 	std::vector<std::unique_ptr<Expression> > expressions;
-	Utility::GlobRecursive(ppath, pattern, std::bind(&ConfigCompiler::CollectIncludes, std::ref(expressions), _1, zone, package), GlobFile);
+	Utility::GlobRecursive(ppath, pattern, [&expressions, zone, package](const String& file) {
+		CollectIncludes(expressions, file, zone, package);
+	}, GlobFile);
 
 	std::unique_ptr<DictExpression> dict{new DictExpression(std::move(expressions))};
 	dict->MakeInline();
@@ -187,7 +190,9 @@ void ConfigCompiler::HandleIncludeZone(const String& relativeBase, const String&
 
 	RegisterZoneDir(tag, ppath, zoneName);
 
-	Utility::GlobRecursive(ppath, pattern, std::bind(&ConfigCompiler::CollectIncludes, std::ref(expressions), _1, zoneName, package), GlobFile);
+	Utility::GlobRecursive(ppath, pattern, [&expressions, zoneName, package](const String& file) {
+		CollectIncludes(expressions, file, zoneName, package);
+	}, GlobFile);
 }
 
 /**
@@ -213,7 +218,10 @@ std::unique_ptr<Expression> ConfigCompiler::HandleIncludeZones(const String& rel
 	}
 
 	std::vector<std::unique_ptr<Expression> > expressions;
-	Utility::Glob(ppath + "/*", std::bind(&ConfigCompiler::HandleIncludeZone, newRelativeBase, tag, _1, pattern, package, std::ref(expressions)), GlobDirectory);
+	Utility::Glob(ppath + "/*", [newRelativeBase, tag, pattern, package, &expressions](const String& path) {
+		HandleIncludeZone(newRelativeBase, tag, path, pattern, package, expressions);
+	}, GlobDirectory);
+
 	return std::unique_ptr<Expression>(new DictExpression(std::move(expressions)));
 }
 
@@ -296,7 +304,7 @@ void ConfigCompiler::AddIncludeSearchDir(const String& dir)
 
 std::vector<ZoneFragment> ConfigCompiler::GetZoneDirs(const String& zone)
 {
-	boost::mutex::scoped_lock lock(m_ZoneDirsMutex);
+	std::unique_lock<std::mutex> lock(m_ZoneDirsMutex);
 	auto it = m_ZoneDirs.find(zone);
 	if (it == m_ZoneDirs.end())
 		return std::vector<ZoneFragment>();
@@ -310,7 +318,7 @@ void ConfigCompiler::RegisterZoneDir(const String& tag, const String& ppath, con
 	zf.Tag = tag;
 	zf.Path = ppath;
 
-	boost::mutex::scoped_lock lock(m_ZoneDirsMutex);
+	std::unique_lock<std::mutex> lock(m_ZoneDirsMutex);
 	m_ZoneDirs[zoneName].push_back(zf);
 }
 

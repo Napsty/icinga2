@@ -2,6 +2,7 @@
 
 #include "base/stream.hpp"
 #include <boost/algorithm/string/trim.hpp>
+#include <chrono>
 
 using namespace icinga;
 
@@ -38,7 +39,7 @@ void Stream::SignalDataAvailable()
 	OnDataAvailable(this);
 
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 		m_CV.notify_all();
 	}
 }
@@ -48,7 +49,7 @@ bool Stream::WaitForData()
 	if (!SupportsWaiting())
 		BOOST_THROW_EXCEPTION(std::runtime_error("Stream does not support waiting."));
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	while (!IsDataAvailable() && !IsEof())
 		m_CV.wait(lock);
@@ -58,24 +59,18 @@ bool Stream::WaitForData()
 
 bool Stream::WaitForData(int timeout)
 {
+	namespace ch = std::chrono;
+
 	if (!SupportsWaiting())
 		BOOST_THROW_EXCEPTION(std::runtime_error("Stream does not support waiting."));
 
 	if (timeout < 0)
 		BOOST_THROW_EXCEPTION(std::runtime_error("Timeout can't be negative"));
 
-	boost::system_time const point_of_timeout = boost::get_system_time() + boost::posix_time::seconds(timeout);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
-	boost::mutex::scoped_lock lock(m_Mutex);
-
-	while (!IsDataAvailable() && !IsEof() && point_of_timeout > boost::get_system_time())
-		m_CV.timed_wait(lock, point_of_timeout);
-
-	return IsDataAvailable() || IsEof();
+	return m_CV.wait_for(lock, ch::duration<int>(timeout), [this]() { return IsDataAvailable() || IsEof(); });
 }
-
-static void StreamDummyCallback()
-{ }
 
 void Stream::Close()
 {
@@ -83,7 +78,7 @@ void Stream::Close()
 
 	/* Force signals2 to remove the slots, see https://stackoverflow.com/questions/2049291/force-deletion-of-slot-in-boostsignals2
 	 * for details. */
-	OnDataAvailable.connect(std::bind(&StreamDummyCallback));
+	OnDataAvailable.connect([](const Stream::Ptr&) {  });
 }
 
 StreamReadStatus Stream::ReadLine(String *line, StreamReadContext& context, bool may_wait)

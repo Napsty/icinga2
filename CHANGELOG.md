@@ -7,6 +7,421 @@ documentation before upgrading to a new release.
 
 Released closed milestones can be found on [GitHub](https://github.com/Icinga/icinga2/milestones?state=closed).
 
+## 2.13.2 (2021-11-12)
+
+This version only includes changes needed for the release of Icinga DB 1.0.0 RC2 and doesn't include any other bugfixes or features.
+
+### Icinga DB
+
+* Prefix command_id with command type #9085
+* Decouple environment from Icinga 2 Environment constant #9082
+* Make icinga:history:stream:*#event_id deterministic #9076
+* Add downtime.duration & service_state.host_id to Redis #9084
+* Sync checkables along with their states first #9081
+* Flush both buffered states and state checksums on initial dump #9079
+* Introduce icinga:history:stream:downtime#scheduled_by #9080
+* Actually write parent to parent_id of zones #9078
+* Set value in milliseconds for program_start in stats/heartbeat #9077
+* Clean up vanished objects from icinga:checksum:*:state #9074
+* Remove usernotification history stream #9073
+* Write IDs of notified users into notification history stream #9071
+* Make CheckResult#scheduling_source available to Icinga DB #9072
+* Stream runtime state updates only to icinga:runtime:state #9068
+* Publish Redis schema version via XADD icinga:schema #9069
+* Don't include checkable types in history IDs #9070
+* Remove unused Redis key 'icinga:zone:parent' #9075
+* Make sure object relationships are handled correctly during runtime updates #9089
+* Only log queries at debug level #9088
+
+## 2.13.1 (2021-08-19)
+
+The main focus of this version is a security vulnerability in the TLS certificate verification of our metrics writers ElasticsearchWriter, GelfWriter, InfluxdbWriter and Influxdb2Writer.
+
+Version 2.13.1 also fixes two issues indroduced with the 2.13.0 release.
+
+### Security
+
+* Add TLS server certificate validation to ElasticsearchWriter, GelfWriter, InfluxdbWriter and Influxdb2Writer ([GHSA-cxfm-8j5v-5qr2](https://github.com/Icinga/icinga2/security/advisories/GHSA-cxfm-8j5v-5qr2))
+
+Depending on your setup, manual intervention beyond installing the new versions
+may be required, so please read the more detailed information in the
+[release blog post](https://icinga.com/blog/2021/08/19/icinga-2-13-1-security-release//)
+carefully
+
+### Bugfixes
+
+* IDO PgSQL: Fix a string quoting regression introduced in 2.13.0 #8958
+* ApiListener: Automatically fall back to IPv4 in default configuration on systems without IPv6 support #8961
+
+## 2.13.0 (2021-08-03)
+
+[Issues and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.13.0)
+
+### Notes
+
+Upgrading docs: https://icinga.com/docs/icinga2/snapshot/doc/16-upgrading-icinga-2/#upgrading-to-v213
+
+Thanks to all contributors:
+[andygrunwald](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aandygrunwald+milestone%3A2.13.0),
+[BausPhi](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3ABausPhi+milestone%3A2.13.0),
+[bebehei](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Abebehei+milestone%3A2.13.0),
+[Bobobo-bo-Bo-bobo](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3ABobobo-bo-Bo-bobo+milestone%3A2.13.0),
+[efuss](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aefuss+milestone%3A2.13.0),
+[froehl](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Afroehl+milestone%3A2.13.0),
+[iustin](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aiustin+milestone%3A2.13.0),
+[JochenFriedrich](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AJochenFriedrich+milestone%3A2.13.0),
+[leeclemens](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aleeclemens+milestone%3A2.13.0),
+[log1-c](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Alog1-c+milestone%3A2.13.0),
+[lyknode](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Alyknode+milestone%3A2.13.0),
+[m41kc0d3](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Am41kc0d3+milestone%3A2.13.0),
+[MarcusCaepio](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AMarcusCaepio+milestone%3A2.13.0),
+[mathiasaerts](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Amathiasaerts+milestone%3A2.13.0),
+[mcktr](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Amcktr+milestone%3A2.13.0),
+[MEschenbacher](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AMEschenbacher+milestone%3A2.13.0),
+[Napsty](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3ANapsty+milestone%3A2.13.0),
+[netson](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Anetson+milestone%3A2.13.0),
+[pdolinic](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Apdolinic+milestone%3A2.13.0),
+[Ragnra](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3ARagnra+milestone%3A2.13.0),
+[RincewindsHat](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3ARincewindsHat+milestone%3A2.13.0),
+[sbraz](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Asbraz+milestone%3A2.13.0),
+[sni](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Asni+milestone%3A2.13.0),
+[sysadt](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Asysadt+milestone%3A2.13.0),
+[XnS](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AXnS+milestone%3A2.13.0),
+[yayayayaka](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Ayayayayaka+milestone%3A2.13.0)
+
+### Enhancements
+
+* Core
+  * PerfdataValue: Add units of measurement #7871
+  * Flapping: Allow to ignore states in flapping detection #8600
+* Cluster
+  * Display log message if two nodes run on incompatible versions #8088
+* API
+  * /v1/actions/remove-downtime: Also remove child downtimes #8913
+  * Add API endpoint: /v1/actions/execute-command #8040
+  * /v1/actions/add-comment: Add param expiry #8035
+  * API-Event StateChange & CheckResult: Add acknowledgement and downtime_depth #7736
+  * Implement new API events ObjectCreated, ObjectDeleted and ObjectModified #8083
+  * Implement scheduling_endpoint attribute to checkable #6326
+* Windows
+  * Add support for Windows Event Log and write early log messages to it #8710
+* IDO
+  * MySQL: support larger host and service names #8425
+* ITL
+  * Add -S parameter for esxi_hardware ITL #8814
+  * Add CheckCommands for Thola #8683
+  * Add option ignore-sct for ssl_cert to ITL #8625
+  * Improve check_dns command when used with monitoring-plugins 2.3 #8589
+  * Add parameter -f to snmp-process #8569
+  * Add systemd CheckCommand #8568
+  * Add new options for ipmi-sensor #8498
+  * check_snmp_int: support -a #8003
+  * check_fail2ban: Add parameter fail2ban_jail to monitor a specific jail only #7960
+  * check_nrpe: Add parameters needed for PKI usage #7907
+* Metrics
+  * Support InfluxDB 2.0 #8719
+  * Add support for InfluxDB basic auth #8314
+* Docs
+  * Add info about ongoing support for IDO #8446
+  * Improve instructions on how to setup a Windows dev env #8400
+  * Improve instructions for installing wixtoolset on Windows #8397
+  * Add section about usage of satellites #8458
+  * Document command for verifying the parent node's certificate #8221
+  * Clarify TimePeriod/ScheduledDowntime time zone handling #8001
+* Misc
+  * Support TLS 1.3 #8718
+  * Livestatus: append app name to program_version #7931
+  * sd_notify() systemd about what we're doing right now #7874
+
+### Bugfixes
+
+* Core
+  * Fix state not being UNKNOWN after process timeout #8937
+  * Set a default severity for loggers #8846
+  * Fix integer overflow when converting large unsigned integers to string #8742
+  * StartUnixWorker(): don't exit() on fork() failure #8427
+  * Fix perf data parser not recognizing scientific notation #8492
+  * Close FDs based on /proc/self/fd #8442
+  * Fix check source getting overwritten on passive check result #8158
+  * Clean up temp files #8157
+  * Improve perf data parser to allow for special output (e.g. ASCII tables) #8008
+  * On check timeout first send SIGTERM #7918
+* Cluster
+  * Drop passive check results for unreachable hosts/services #8267
+  * Fix state timestamps set by the same check result differing across nodes #8101
+* API
+  * Do not override status codes that are not 200 #8532
+  * Update the SSL context after accepting incoming connections #8515
+  * Allow to create API User with password #8321
+  * Send Content-Type as API response header too #8108
+  * Display a correct status when removing a downtime #8104
+  * Display log message if a permission error occurs #8087
+  * Replace broken package name validation regex #8825 #8946
+* Windows
+  * Fix Windows command escape for \" #7092
+* Notifications/Downtimes
+  * Fix no re-notification for non OK state changes with time delay #8562
+  * TimePeriod/ScheduledDowntime: Improve DST handling #8921
+  * Don't send notifications while suppressed by checkable #8513
+  * Fix a crash while removing a downtime from a disappeared checkable #8229
+* IDO
+  * Update program status on stop #8730
+  * Also mark objects inactive in memory on object deactivation #8626
+  * IdoCheckTask: Don't override checkable critical with warn state #8613
+  * PostgreSQL: Do not set standard_conforming_strings to off #8123
+* ITL
+  * check_http: Fix assignment of check_adress blocking check by hostname #8109
+  * check_mysql: Don't set -H if -s is given #8020
+* Metrics
+  * OpenTSDB-Writer: Remove incorrect space causing missing tag error #8245
+
+## 2.12.5 (2021-07-15)
+
+Version 2.12.5 fixes two security vulnerabilities that may lead to privilege
+escalation for authenticated API users. Other improvements include several
+bugfixes related to downtimes, downtime notifications, and more reliable
+connection handling.
+
+### Security
+
+* Don't expose the PKI ticket salt via the API. This may lead to privilege
+  escalation for authenticated API users by them being able to request
+  certificates for other identities (CVE-2021-32739)
+* Don't expose IdoMysqlConnection, IdoPgsqlConnection, IcingaDB, and
+  ElasticsearchWriter passwords via the API (CVE-2021-32743)
+* Windows: Update bundled OpenSSL to version 1.1.1k #8885
+
+Depending on your setup, manual intervention beyond installing the new versions
+may be required, so please read the more detailed information in the
+[release blog post](https://icinga.com/blog/2021/07/15/releasing-icinga-2-12-5-and-2-11-10/)
+carefully.
+
+### Bugfixes
+
+* Don't send downtime end notification if downtime hasn't started #8877
+* Don't let a failed downtime creation block the others #8863
+* Support downtimes and comments for checkables with long names #8864
+* Trigger fixed downtimes immediately if the current time matches
+  (instead of waiting for the timer) #8889
+* Add configurable timeout for full connection handshake #8866
+
+### Enhancements
+
+* Replace existing downtimes on ScheduledDowntime change #8879
+* Improve crashlog #8865
+
+## 2.12.4 (2021-05-27)
+
+Version 2.12.4 is a maintenance release that fixes some crashes, improves error handling
+and adds compatibility for systems coming with newer Boost versions.
+
+### Bugfixes
+
+* Fix a crash when notification objects are deleted using the API #8782
+* Fix crashes that might occur during downtime scheduling if host or downtime objects are deleted using the API #8785
+* Fix an issue where notifications may incorrectly be skipped after a downtime ends #8775
+* Don't send reminder notification if the notification is still suppressed by a time period #8808
+* Fix an issue where attempting to create a duplicate object using the API
+  might result in the original object being deleted #8787
+* IDO: prioritize program status updates #8809
+* Improve exceptions handling, including a fix for an uncaught exception on Windows #8777
+* Retry file rename operations on Windows to avoid intermittent locking issues #8771
+
+### Enhancements
+
+* Support Boost 1.74 (Ubuntu 21.04, Fedora 34) #8792
+
+## 2.12.3 (2020-12-15)
+
+Version 2.12.3 resolves a security vulnerability with revoked certificates being
+renewed automatically ignoring the CRL.
+
+This version also resolves issues with high load on Windows regarding the config sync
+and not being able to disable/enable Icinga 2 features over the API.
+
+### Security
+
+* Fix that revoked certificates due for renewal will automatically be renewed ignoring the CRL (CVE-2020-29663)
+
+When a CRL is specified in the ApiListener configuration, Icinga 2 only used it
+when connections were established so far, but not when a certificate is requested.
+This allows a node to automatically renew a revoked certificate if it meets the
+other conditions for auto renewal (issued before 2017 or expires in less than 30 days).
+
+Because Icinga 2 currently (v2.12.3 and earlier) uses a validity duration of 15 years,
+this only affects setups with external certificate signing and revoked certificates
+that expire in less then 30 days.
+
+### Bugfixes
+
+* Improve config sync locking - resolves high load issues on Windows #8511
+* Fix runtime config updates being ignored for objects without zone #8549
+* Use proper buffer size for OpenSSL error messages #8542
+
+### Enhancements
+
+* On checkable recovery: re-check children that have a problem #8506
+
+## 2.12.2 (2020-12-01)
+
+Version 2.12.2 fixes several issues to improve the reliability of the cluster functionality.
+
+### Bugfixes
+
+* Fix a connection leak with misconfigured agents #8483
+* Properly sync changes of config objects in global zones done via the API #8474 #8470
+* Prevent other clients from being disconnected when replaying the cluster log takes very long #8496
+* Avoid duplicate connections between endpoints #8465
+* Ignore incoming config object updates for unknown zones #8461
+* Check timestamps before removing files in config sync #8495
+
+### Enhancements
+
+* Include HTTP status codes in log #8467
+
+## 2.12.1 (2020-10-15)
+
+Version 2.12.1 fixes several crashes, deadlocks and excessive check latencies.
+It also addresses several bugs regarding IDO, API, notifications and checks.
+
+### Bugfixes
+
+* Core
+  * Fix crashes during config update #8348 #8345
+  * Fix crash while removing a downtime #8228
+  * Ensure the daemon doesn't get killed by logrotate #8170
+  * Fix hangup during shutdown #8211
+  * Fix a deadlock in Icinga DB #8168
+  * Clean up zombie processes during reload #8376
+  * Reduce check latency #8276
+* IDO
+  * Prevent unnecessary IDO updates #8327 #8320
+  * Commit IDO MySQL transactions earlier #8349
+  * Make sure to insert IDO program status #8330
+  * Improve IDO queue stats logging #8271 #8328 #8379
+* Misc
+  * Ensure API connections are closed properly #8293
+  * Prevent unnecessary notifications #8299
+  * Don't skip null values of command arguments #8174
+  * Fix Windows .exe version #8234
+  * Reset Icinga check warning after successful config update #8189
+
+## 2.12.0 (2020-08-05)
+
+[Issue and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.12.0)
+
+### Notes
+
+Upgrading docs: https://icinga.com/docs/icinga2/snapshot/doc/16-upgrading-icinga-2/#upgrading-to-v212
+
+Thanks to all contributors:
+[Ant1x](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AAnt1x+milestone%3A2.12.0),
+[azthec](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aazthec+milestone%3A2.12.0),
+[baurmatt](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Abaurmatt+milestone%3A2.12.0),
+[bootc](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Abootc+milestone%3A2.12.0),
+[Foxeronie](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AFoxeronie+milestone%3A2.12.0),
+[ggzengel](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aggzengel+milestone%3A2.12.0),
+[islander](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aislander+milestone%3A2.12.0),
+[joni1993](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Ajoni1993+milestone%3A2.12.0),
+[KAMI911](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AKAMI911+milestone%3A2.12.0),
+[mcktr](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Amcktr+milestone%3A2.12.0),
+[MichalMMac](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3AMichalMMac+milestone%3A2.12.0),
+[sebastic](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Asebastic+milestone%3A2.12.0),
+[sthen](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Asthen+milestone%3A2.12.0),
+[unki](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Aunki+milestone%3A2.12.0),
+[vigiroux](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Avigiroux+milestone%3A2.12.0),
+[wopfel](https://github.com/Icinga/icinga2/pulls?q=is%3Apr+author%3Awopfel+milestone%3A2.12.0)
+
+### Breaking changes
+
+* Deprecate Windows plugins in favor of our
+  [PowerShell plugins](https://github.com/Icinga/icinga-powershell-plugins) #8071
+* Deprecate Livestatus #8051
+* Refuse acknowledging an already acknowledged checkable #7695
+* Config lexer: complain on EOF in heredocs, i.e. `{{{abc<EOF>` #7541
+
+### Enhancements
+
+* Core
+  * Implement new database backend: Icinga DB #7571
+  * Re-send notifications previously suppressed by their time periods #7816
+* API
+  * Host/Service: Add `acknowledgement_last_change` and `next_update` attributes #7881 #7534
+  * Improve error message for POST queries #7681
+  * /v1/actions/remove-comment: let users specify themselves #7646
+  * /v1/actions/remove-downtime: let users specify themselves #7645
+  * /v1/config/stages: Add 'activate' parameter #7535
+* CLI
+  * Add `pki verify` command for better TLS certificate troubleshooting #7843
+  * Add OpenSSL version to 'Build' section in --version #7833
+  * Improve experience with 'Node Setup for Agents/Satellite' #7835
+* DSL
+  * Add `get_template()` and `get_templates()` #7632
+  * `MacroProcessor::ResolveArguments()`: skip null argument values #7567
+  * Fix crash due to dependency apply rule with `ignore_on_error` and non-existing parent #7538
+  * Introduce ternary operator (`x ? y : z`) #7442
+  * LegacyTimePeriod: support specifying seconds #7439
+  * Add support for Lambda Closures (`() use(x) => x and () use(x) => { return x }`) #7417
+* ITL
+  * Add notemp parameter to oracle health #7748
+  * Add extended checks options to snmp-interface command template #7602
+  * Add file age check for Windows command definition #7540
+* Docs
+  * Development: Update debugging instructions #7867
+  * Add new API clients #7859
+  * Clarify CRITICAL vs. UNKNOWN #7665
+  * Explicitly explain how to disable freshness checks #7664
+  * Update installation for RHEL/CentOS 8 and SLES 15 #7640
+  * Add Powershell example to validate the certificate #7603
+* Misc
+  * Don't send `event::Heartbeat` to unauthenticated peers #7747
+  * OpenTsdbWriter: Add custom tag support #7357
+
+### Bugfixes
+
+* Core
+  * Fix JSON-RPC crashes #7532 #7737
+  * Fix zone definitions in zones #7546
+  * Fix deadlock during start on OpenBSD #7739
+  * Consider PENDING not a problem #7685
+  * Fix zombie processes after reload #7606
+  * Don't wait for checks to finish during reload #7894
+* Cluster
+  * Fix segfault during heartbeat timeout with clients not yet signed #7970
+  * Make the config update process mutually exclusive (Prevents file system race conditions) #7936
+  * Fix `check_timeout` not being forwarded to agent command endpoints #7861
+  * Config sync: Use a more friendly message when configs are equal and don't need a reload #7811
+  * Fix open connections when agent waits for CA approval #7686
+  * Consider a JsonRpcConnection alive on a single byte of TLS payload, not only on a whole message #7836
+  * Send JsonRpcConnection heartbeat every 20s instead of 10s #8102
+  * Use JsonRpcConnection heartbeat only to update connection liveness (m\_Seen) #8142
+  * Fix TLS context not being updated on signed certificate messages on agents #7654
+* API
+  * Close connections w/o successful TLS handshakes after 10s #7809
+  * Handle permission exceptions soon enough, returning 404 #7528
+* SELinux
+  * Fix safe-reload #7858
+  * Allow direct SMTP notifications #7749
+* Windows
+  * Terminate check processes with UNKNOWN state on timeout #7788
+  * Ensure that log replay files are properly renamed #7767
+* Metrics
+  * Graphite/OpenTSDB: Ensure that reconnect failure is detected #7765
+  * Always send 0 as value for thresholds #7696
+* Scripts
+  * Fix notification scripts to stay compatible with Dash #7706
+  * Fix bash line continuation in mail-host-notification.sh #7701
+  * Fix notification scripts string comparison #7647
+  * Service and host mail-notifications: Add line-breaks to very long output #6822
+  * Set correct UTF-8 email subject header (RFC1342) #6369
+* Misc
+  * DSL: Fix segfault due to passing null as custom function to `Array#{sort,map,reduce,filter,any,all}()` #8053
+  * CLI: `pki save-cert`: allow to specify --key and --cert for backwards compatibility #7995
+  * Catch exception when trusted cert is not readable during node setup on agent/satellite #7838
+  * CheckCommand ssl: Fix wrong parameter `-N` #7741
+  * Code quality fixes
+  * Small documentation fixes
+
 ## 2.12.0 RC1 (2020-03-13)
 
 [Issue and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.12.0)
@@ -110,6 +525,176 @@ Thanks to all contributors:
   * CheckCommand ssl: Fix wrong parameter `-N` #7741
   * Code quality fixes
   * Small documentation fixes
+
+## 2.11.11 (2021-08-19)
+
+The main focus of these versions is a security vulnerability in the TLS certificate verification of our metrics writers ElasticsearchWriter, GelfWriter and InfluxdbWriter.
+
+### Security
+
+* Add TLS server certificate validation to ElasticsearchWriter, GelfWriter and InfluxdbWriter
+
+Depending on your setup, manual intervention beyond installing the new versions
+may be required, so please read the more detailed information in the
+[release blog post](https://icinga.com/blog/2021/08/19/icinga-2-13-1-security-release//)
+carefully
+
+## 2.11.10 (2021-07-15)
+
+Version 2.11.10 fixes two security vulnerabilities that may lead to privilege
+escalation for authenticated API users. Other improvements include several
+bugfixes related to downtimes, downtime notifications, and more reliable
+connection handling.
+
+### Security
+
+* Don't expose the PKI ticket salt via the API. This may lead to privilege
+  escalation for authenticated API users by them being able to request
+  certificates for other identities (CVE-2021-32739)
+* Don't expose IdoMysqlConnection, IdoPgsqlConnection, and ElasticsearchWriter
+  passwords via the API (CVE-2021-32743)
+* Windows: Update bundled OpenSSL to version 1.1.1k #8888
+
+Depending on your setup, manual intervention beyond installing the new versions
+may be required, so please read the more detailed information in the
+[release blog post](https://icinga.com/blog/2021/07/15/releasing-icinga-2-12-5-and-2-11-10/)
+carefully.
+
+### Bugfixes
+
+* Don't send downtime end notification if downtime hasn't started #8878
+* Don't let a failed downtime creation block the others #8871
+* Support downtimes and comments for checkables with long names #8870
+* Trigger fixed downtimes immediately if the current time matches
+  (instead of waiting for the timer) #8891
+* Add configurable timeout for full connection handshake #8872
+
+### Enhancements
+
+* Replace existing downtimes on ScheduledDowntime change #8880
+* Improve crashlog #8869
+
+## 2.11.9 (2021-05-27)
+
+Version 2.11.9 is a maintenance release that fixes some crashes, improves error handling
+and adds compatibility for systems coming with newer Boost versions.
+
+### Bugfixes
+
+* Fix a crash when notification objects are deleted using the API #8780
+* Fix crashes that might occur during downtime scheduling if host or downtime objects are deleted using the API #8784
+* Fix an issue where notifications may incorrectly be skipped after a downtime ends #8772
+* Fix an issue where attempting to create a duplicate object using the API
+  might result in the original object being deleted #8788
+* IDO: prioritize program status updates #8810
+* Improve exceptions handling, including a fix for an uncaught exception on Windows #8776
+* Retry file rename operations on Windows to avoid intermittent locking issues #8770
+
+### Enhancements
+
+* Support Boost 1.74 (Ubuntu 21.04, Fedora 34) #8793 #8802
+
+## 2.11.8 (2020-12-15)
+
+Version 2.11.8 resolves a security vulnerability with revoked certificates being
+renewed automatically ignoring the CRL.
+
+This version also resolves issues with high load on Windows regarding the config sync
+and not being able to disable/enable Icinga 2 features over the API.
+
+### Security
+
+* Fix that revoked certificates due for renewal will automatically be renewed ignoring the CRL (CVE-2020-29663)
+
+When a CRL is specified in the ApiListener configuration, Icinga 2 only used it
+when connections were established so far, but not when a certificate is requested.
+This allows a node to automatically renew a revoked certificate if it meets the
+other conditions for auto renewal (issued before 2017 or expires in less than 30 days).
+
+Because Icinga 2 currently (v2.12.3 and earlier) uses a validity duration of 15 years,
+this only affects setups with external certificate signing and revoked certificates
+that expire in less then 30 days.
+
+### Bugfixes
+
+* Improve config sync locking - resolves high load issues on Windows #8510
+* Fix runtime config updates being ignored for objects without zone #8550
+* Use proper buffer size for OpenSSL error messages #8543
+
+### Enhancements
+
+* On checkable recovery: re-check children that have a problem #8560 
+
+## 2.11.7 (2020-12-01)
+
+Version 2.11.7 fixes several issues to improve the reliability of the cluster functionality.
+
+### Bugfixes
+
+* Fix a connection leak with misconfigured agents #8482
+* Properly sync changes of config objects in global zones done via the API #8473 #8457
+* Prevent other clients from being disconnected when replaying the cluster log takes very long #8475
+* Avoid duplicate connections between endpoints #8399
+* Ignore incoming config object updates for unknown zones #8459
+* Check timestamps before removing files in config sync #8486
+
+### Enhancements
+
+* Include HTTP status codes in log #8454
+
+## 2.11.6 (2020-10-15)
+
+Version 2.11.6 fixes several crashes, prevents unnecessary notifications
+and addresses several bugs in IDO and API.
+
+### Bugfixes
+
+* Crashes
+  * Fix crashes during config update #8337 #8308
+  * Fix crash while removing a downtime #8226
+  * Ensure the daemon doesn't get killed by logrotate #8227
+* IDO
+  * Prevent unnecessary IDO updates #8316 #8305
+  * Commit IDO MySQL transactions earlier #8298
+  * Make sure to insert IDO program status #8291
+  * Improve IDO queue stats logging #8270 #8325 #8378
+* API
+  * Ensure API connections are closed properly #8292
+  * Fix open connections when agent waits for CA approval #8230
+  * Close connections without successful TLS handshakes within 10s #8224
+* Misc
+  * Prevent unnecessary notifications #8300
+  * Fix Windows .exe version #8235
+  * Reset Icinga check warning after successful config update #8225
+
+## 2.11.5 (2020-08-05)
+
+Version 2.11.5 fixes file system race conditions
+in the config update process occurring in large HA environments
+and improves the cluster connection liveness mechanisms.
+
+### Bugfixes
+
+* Make the config update process mutually exclusive (Prevents file system race conditions) #8093
+* Consider a JsonRpcConnection alive on a single byte of TLS payload, not only on a whole message #8094
+* Send JsonRpcConnection heartbeat every 20s instead of 10s #8103
+* Use JsonRpcConnection heartbeat only to update connection liveness (m\_Seen) #8097
+
+## 2.11.4 (2020-06-18)
+
+Version 2.11.4 fixes a crash during a heartbeat timeout with clients not yet signed. It also resolves
+an issue with endpoints not reconnecting after a reload/deploy, which caused a lot of UNKNOWN states.
+
+### Bugfixes
+
+* Cluster
+  * Fix segfault during heartbeat timeout with clients not yet signed #7997
+  * Fix endpoints not reconnecting after reload (UNKNOWN hosts/services after reload) #8043
+* Setup
+  * Fix exception on trusted cert not readable during node setup #8044
+  * prepare-dirs: Only set permissions during directory creation #8046
+* DSL
+  * Fix segfault on missing compare function in Array functions (sort, map, reduce, filter, any, all) #8054
 
 ## 2.11.3 (2020-03-02)
 
@@ -272,6 +857,25 @@ Thanks to all contributors: [BarbUk](https://github.com/Icinga/icinga2/pulls?q=i
   * Packaging: INSTALL.md was integrated into the Development chapter available at https://icinga.com/docs too.
 
 
+
+
+## 2.10.7 (2019-10-17)
+
+[Issue and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.10.7)
+
+### Bugfixes
+
+* Cluster config master must not load/sync its marker to other instances #7544
+  * This affects scenarios where the satellite/agent is newer than the master, e.g. master=2.10.x satellite=2.11.0
+
+
+## 2.10.6 (2019-07-30)
+
+[Issue and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.10.6)
+
+### Bugfixes
+
+* Fix el7 not loading ECDHE cipher suites #7247
 
 
 ## 2.10.5 (2019-05-23)
@@ -633,6 +1237,16 @@ Documentation updates:
 * [#6440](https://github.com/icinga/icinga2/issues/6440) (code-quality, PR): Fix typo
 * [#6410](https://github.com/icinga/icinga2/issues/6410) (code-quality, PR): Remove unused code
 * [#4959](https://github.com/icinga/icinga2/issues/4959) (Installation, Windows): Windows Agent Wizard Window resizes with screen, hiding buttons
+
+## 2.9.3 (2019-07-30)
+
+[Issue and PRs](https://github.com/Icinga/icinga2/issues?utf8=%E2%9C%93&q=milestone%3A2.9.3)
+
+### Bugfixes
+
+* Fix el7 not loading ECDHE cipher suites #7247
+* Fix checkresults from the future breaking checks #6797 ref/NC/595861
+* DB IDO: Don't enqueue queries when the feature is paused (HA) #5876
 
 ## 2.9.2 (2018-09-26)
 

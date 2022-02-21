@@ -6,6 +6,7 @@ mkclass_target(configuration.ti configuration-ti.cpp configuration-ti.hpp)
 mkclass_target(datetime.ti datetime-ti.cpp datetime-ti.hpp)
 mkclass_target(filelogger.ti filelogger-ti.cpp filelogger-ti.hpp)
 mkclass_target(function.ti function-ti.cpp function-ti.hpp)
+mkclass_target(journaldlogger.ti journaldlogger-ti.cpp journaldlogger-ti.hpp)
 mkclass_target(logger.ti logger-ti.cpp logger-ti.hpp)
 mkclass_target(perfdatavalue.ti perfdatavalue-ti.cpp perfdatavalue-ti.hpp)
 mkclass_target(streamlogger.ti streamlogger-ti.cpp streamlogger-ti.hpp)
@@ -36,6 +37,7 @@ set(base_SOURCES
   function.cpp function.hpp function-ti.hpp function-script.cpp functionwrapper.hpp
   initialize.cpp initialize.hpp
   io-engine.cpp io-engine.hpp
+  journaldlogger.cpp journaldlogger.hpp journaldlogger-ti.hpp
   json.cpp json.hpp json-script.cpp
   lazy-init.hpp
   library.cpp library.hpp
@@ -70,7 +72,6 @@ set(base_SOURCES
   stream.cpp stream.hpp
   streamlogger.cpp streamlogger.hpp streamlogger-ti.hpp
   string.cpp string.hpp string-script.cpp
-  stringbuilder.cpp stringbuilder.hpp
   sysloglogger.cpp sysloglogger.hpp sysloglogger-ti.hpp
   tcpsocket.cpp tcpsocket.hpp
   threadpool.cpp threadpool.hpp
@@ -86,7 +87,37 @@ set(base_SOURCES
   workqueue.cpp workqueue.hpp
 )
 
-set_property(SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/application-version.cpp PROPERTY EXCLUDE_UNITY_BUILD TRUE)
+if(WIN32)
+  mkclass_target(windowseventloglogger.ti windowseventloglogger-ti.cpp windowseventloglogger-ti.hpp)
+  list(APPEND base_SOURCES windowseventloglogger.cpp windowseventloglogger.hpp windowseventloglogger-ti.hpp)
+
+  # Generate a DLL containing message definitions for the Windows Event Viewer.
+  # See also: https://docs.microsoft.com/en-us/windows/win32/eventlog/reporting-an-event
+  add_custom_command(
+    OUTPUT windowseventloglogger-provider.rc windowseventloglogger-provider.h
+    COMMAND mc ARGS -U ${CMAKE_CURRENT_SOURCE_DIR}/windowseventloglogger-provider.mc
+    DEPENDS windowseventloglogger-provider.mc
+  )
+
+  list(APPEND base_SOURCES windowseventloglogger-provider.h)
+
+  add_custom_command(
+    OUTPUT windowseventloglogger-provider.res
+    COMMAND rc ARGS windowseventloglogger-provider.rc
+    DEPENDS windowseventloglogger-provider.rc
+  )
+
+  add_library(eventprovider MODULE windowseventloglogger-provider.res windowseventloglogger-provider.rc)
+  set_target_properties(eventprovider PROPERTIES LINKER_LANGUAGE CXX)
+  target_link_libraries(eventprovider PRIVATE -noentry)
+
+  install(TARGETS eventprovider LIBRARY DESTINATION ${CMAKE_INSTALL_SBINDIR})
+endif()
+
+set_property(
+  SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/application-version.cpp ${CMAKE_CURRENT_SOURCE_DIR}/journaldlogger.cpp
+  PROPERTY EXCLUDE_UNITY_BUILD TRUE
+)
 
 if(ICINGA2_UNITY_BUILD)
   mkunity_target(base base base_SOURCES)
@@ -97,6 +128,11 @@ if(HAVE_SYSTEMD)
     NAMES systemd/sd-daemon.h
     HINTS ${SYSTEMD_ROOT_DIR})
   include_directories(${SYSTEMD_INCLUDE_DIR})
+  set_property(
+    SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/journaldlogger.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    SD_JOURNAL_SUPPRESS_LOCATION
+  )
 endif()
 
 add_library(base OBJECT ${base_SOURCES})

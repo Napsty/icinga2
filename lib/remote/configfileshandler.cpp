@@ -52,12 +52,12 @@ bool ConfigFilesHandler::HandleRequest(
 	String packageName = HttpUtility::GetLastParameter(params, "package");
 	String stageName = HttpUtility::GetLastParameter(params, "stage");
 
-	if (!ConfigPackageUtility::ValidateName(packageName)) {
+	if (!ConfigPackageUtility::ValidatePackageName(packageName)) {
 		HttpUtility::SendJsonError(response, params, 400, "Invalid package name.");
 		return true;
 	}
 
-	if (!ConfigPackageUtility::ValidateName(stageName)) {
+	if (!ConfigPackageUtility::ValidateStageName(stageName)) {
 		HttpUtility::SendJsonError(response, params, 400, "Invalid stage name.");
 		return true;
 	}
@@ -84,7 +84,7 @@ bool ConfigFilesHandler::HandleRequest(
 		response.result(http::status::ok);
 		response.set(http::field::content_type, "application/octet-stream");
 		response.body() = content;
-		response.set(http::field::content_length, response.body().size());
+		response.content_length(response.body().size());
 	} catch (const std::exception& ex) {
 		HttpUtility::SendJsonError(response, params, 500, "Could not read file.",
 			DiagnosticInformation(ex));

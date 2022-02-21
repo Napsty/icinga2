@@ -12,7 +12,11 @@
 #include "icinga/service.hpp"
 #include "icinga/downtime.hpp"
 #include "remote/messageorigin.hpp"
+#include <atomic>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <unordered_map>
 #include <utility>
 
 namespace icinga
@@ -31,12 +35,36 @@ public:
 
 	static void ConfigStaticInitialize();
 
+	void Validate(int types, const ValidationUtils& utils) override;
 	virtual void Start(bool runtimeCreated) override;
 	virtual void Stop(bool runtimeRemoved) override;
 
+	String GetEnvironmentId() const override;
+
+protected:
+	void ValidateTlsProtocolmin(const Lazy<String>& lvalue, const ValidationUtils& utils) override;
+	void ValidateConnectTimeout(const Lazy<double>& lvalue, const ValidationUtils& utils) override;
+
 private:
-	void ReconnectTimerHandler();
-	void TryToReconnect();
+	class DumpedGlobals
+	{
+	public:
+		void Reset();
+		bool IsNew(const String& id);
+
+	private:
+		std::set<String> m_Ids;
+		std::mutex m_Mutex;
+	};
+
+	enum StateUpdate
+	{
+		Volatile    = 1ull << 0,
+		RuntimeOnly = 1ull << 1,
+		Full        = Volatile | RuntimeOnly,
+	};
+
+	void OnConnectedHandler();
 
 	void PublishStatsTimerHandler();
 	void PublishStats();
@@ -44,20 +72,24 @@ private:
 	/* config & status dump */
 	void UpdateAllConfigObjects();
 	std::vector<std::vector<intrusive_ptr<ConfigObject>>> ChunkObjects(std::vector<intrusive_ptr<ConfigObject>> objects, size_t chunkSize);
-	void DeleteKeys(const std::vector<String>& keys, RedisConnection::QueryPriority priority);
-	std::vector<String> GetTypeObjectKeys(const String& type);
+	void DeleteKeys(const RedisConnection::Ptr& conn, const std::vector<String>& keys, RedisConnection::QueryPriority priority);
+	std::vector<String> GetTypeOverwriteKeys(const String& type);
+	std::vector<String> GetTypeDumpSignalKeys(const Type::Ptr& type);
 	void InsertObjectDependencies(const ConfigObject::Ptr& object, const String typeName, std::map<String, std::vector<String>>& hMSets,
-			std::map<String, std::vector<String>>& publishes, bool runtimeUpdate);
-	void UpdateState(const Checkable::Ptr& checkable);
+			std::vector<Dictionary::Ptr>& runtimeUpdates, bool runtimeUpdate);
+	void UpdateState(const Checkable::Ptr& checkable, StateUpdate mode);
 	void SendConfigUpdate(const ConfigObject::Ptr& object, bool runtimeUpdate);
 	void CreateConfigUpdate(const ConfigObject::Ptr& object, const String type, std::map<String, std::vector<String>>& hMSets,
-			std::map<String, std::vector<String>>& publishes, bool runtimeUpdate);
+			std::vector<Dictionary::Ptr>& runtimeUpdates, bool runtimeUpdate);
 	void SendConfigDelete(const ConfigObject::Ptr& object);
-	void SendStatusUpdate(const ConfigObject::Ptr& object, const CheckResult::Ptr& cr, StateType type);
+	void SendStateChange(const ConfigObject::Ptr& object, const CheckResult::Ptr& cr, StateType type);
+	void AddObjectDataToRuntimeUpdates(std::vector<Dictionary::Ptr>& runtimeUpdates, const String& objectKey,
+			const String& redisKey, const Dictionary::Ptr& data);
+	void DeleteRelationship(const String& id, const String& redisKeyWithoutPrefix, bool hasChecksum = false);
 
 	void SendSentNotification(
 		const Notification::Ptr& notification, const Checkable::Ptr& checkable, const std::set<User::Ptr>& users,
-		NotificationType type, const CheckResult::Ptr& cr, const String& author, const String& text
+		NotificationType type, const CheckResult::Ptr& cr, const String& author, const String& text, double sendTime
 	);
 
 	void SendStartedDowntime(const Downtime::Ptr& downtime);
@@ -68,6 +100,16 @@ private:
 	void SendNextUpdate(const Checkable::Ptr& checkable);
 	void SendAcknowledgementSet(const Checkable::Ptr& checkable, const String& author, const String& comment, AcknowledgementType type, bool persistent, double changeTime, double expiry);
 	void SendAcknowledgementCleared(const Checkable::Ptr& checkable, const String& removedBy, double changeTime, double ackLastChange);
+	void SendNotificationUsersChanged(const Notification::Ptr& notification, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	void SendNotificationUserGroupsChanged(const Notification::Ptr& notification, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	void SendTimePeriodRangesChanged(const TimePeriod::Ptr& timeperiod, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	void SendTimePeriodIncludesChanged(const TimePeriod::Ptr& timeperiod, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	void SendTimePeriodExcludesChanged(const TimePeriod::Ptr& timeperiod, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	template<class T>
+	void SendGroupsChanged(const ConfigObject::Ptr& command, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	void SendCommandEnvChanged(const ConfigObject::Ptr& command, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	void SendCommandArgumentsChanged(const ConfigObject::Ptr& command, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	void SendCustomVarsChanged(const ConfigObject::Ptr& object, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
 
 	std::vector<String> UpdateObjectAttrs(const ConfigObject::Ptr& object, int fieldType, const String& typeNameOverride);
 	Dictionary::Ptr SerializeState(const Checkable::Ptr& checkable);
@@ -79,11 +121,14 @@ private:
 	static String FormatCheckSumBinary(const String& str);
 	static String FormatCommandLine(const Value& commandLine);
 	static long long TimestampToMilliseconds(double timestamp);
+	static String IcingaToStreamValue(const Value& value);
+	static std::vector<Value> GetArrayDeletedValues(const Array::Ptr& arrayOld, const Array::Ptr& arrayNew);
+	static std::vector<String> GetDictionaryDeletedKeys(const Dictionary::Ptr& dictOld, const Dictionary::Ptr& dictNew);
 
-	static ArrayData GetObjectIdentifiersWithoutEnv(const ConfigObject::Ptr& object);
 	static String GetObjectIdentifier(const ConfigObject::Ptr& object);
-	static String GetEnvironment();
-	static Dictionary::Ptr SerializeVars(const CustomVarObject::Ptr& object);
+	static String CalcEventID(const char* eventType, const ConfigObject::Ptr& object, double eventTime = 0, NotificationType nt = NotificationType(0));
+	static const char* GetNotificationTypeByEnum(NotificationType type);
+	static Dictionary::Ptr SerializeVars(const Dictionary::Ptr& vars);
 
 	static String HashValue(const Value& value);
 	static String HashValue(const Value& value, const std::set<String>& propertiesBlacklist, bool propertiesWhitelist = false);
@@ -91,7 +136,7 @@ private:
 	static String GetLowerCaseTypeNameDB(const ConfigObject::Ptr& obj);
 	static bool PrepareObject(const ConfigObject::Ptr& object, Dictionary::Ptr& attributes, Dictionary::Ptr& checkSums);
 
-	static void StateChangeHandler(const ConfigObject::Ptr& object);
+	static void ReachabilityChangeHandler(const std::set<Checkable::Ptr>& children);
 	static void StateChangeHandler(const ConfigObject::Ptr& object, const CheckResult::Ptr& cr, StateType type);
 	static void VersionChangedHandler(const ConfigObject::Ptr& object);
 	static void DowntimeStartedHandler(const Downtime::Ptr& downtime);
@@ -107,44 +152,46 @@ private:
 	static void FlappingChangeHandler(const Checkable::Ptr& checkable, double changeTime);
 	static void NewCheckResultHandler(const Checkable::Ptr& checkable);
 	static void NextCheckChangedHandler(const Checkable::Ptr& checkable);
+	static void HostProblemChangedHandler(const Service::Ptr& service);
 	static void AcknowledgementSetHandler(const Checkable::Ptr& checkable, const String& author, const String& comment, AcknowledgementType type, bool persistent, double changeTime, double expiry);
 	static void AcknowledgementClearedHandler(const Checkable::Ptr& checkable, const String& removedBy, double changeTime);
+	static void NotificationUsersChangedHandler(const Notification::Ptr& notification, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void NotificationUserGroupsChangedHandler(const Notification::Ptr& notification, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void TimePeriodRangesChangedHandler(const TimePeriod::Ptr& timeperiod, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	static void TimePeriodIncludesChangedHandler(const TimePeriod::Ptr& timeperiod, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void TimePeriodExcludesChangedHandler(const TimePeriod::Ptr& timeperiod, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void UserGroupsChangedHandler(const User::Ptr& user, const Array::Ptr&, const Array::Ptr& newValues);
+	static void HostGroupsChangedHandler(const Host::Ptr& host, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void ServiceGroupsChangedHandler(const Service::Ptr& service, const Array::Ptr& oldValues, const Array::Ptr& newValues);
+	static void CommandEnvChangedHandler(const ConfigObject::Ptr& command, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	static void CommandArgumentsChangedHandler(const ConfigObject::Ptr& command, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
+	static void CustomVarsChangedHandler(const ConfigObject::Ptr& object, const Dictionary::Ptr& oldValues, const Dictionary::Ptr& newValues);
 
 	void AssertOnWorkQueue();
 
 	void ExceptionHandler(boost::exception_ptr exp);
 
-	template<class T>
-	static inline
-	std::vector<T> Prepend(std::vector<T>&& needle, std::vector<T>&& haystack)
-	{
-		for (auto& hay : haystack) {
-			needle.emplace_back(std::move(hay));
-		}
-
-		return std::move(needle);
-	}
-
-	template<class T, class Needle>
-	static inline
-	std::vector<T> Prepend(Needle&& needle, std::vector<T>&& haystack)
-	{
-		haystack.emplace(haystack.begin(), std::forward<Needle>(needle));
-		return std::move(haystack);
-	}
+	static std::vector<Type::Ptr> GetTypes();
 
 	Timer::Ptr m_StatsTimer;
-	Timer::Ptr m_ReconnectTimer;
-	WorkQueue m_WorkQueue;
+	WorkQueue m_WorkQueue{0, 1, LogNotice};
 
 	String m_PrefixConfigObject;
 	String m_PrefixConfigCheckSum;
-	String m_PrefixStateObject;
 
 	bool m_ConfigDumpInProgress;
 	bool m_ConfigDumpDone;
 
 	RedisConnection::Ptr m_Rcon;
+	std::unordered_map<ConfigType*, RedisConnection::Ptr> m_Rcons;
+	std::atomic_size_t m_PendingRcons;
+
+	struct {
+		DumpedGlobals CustomVar, ActionUrl, NotesUrl, IconImage;
+	} m_DumpedGlobals;
+
+	static String m_EnvironmentId;
+	static std::once_flag m_EnvironmentIdOnce;
 };
 }
 

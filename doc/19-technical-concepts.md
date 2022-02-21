@@ -422,7 +422,7 @@ is a list with multiple indexes with the keys for scheduling info and the object
 Each check command execution logs the start and end time where
 Icinga 2 (and the end user) is able to calculate the plugin execution time from it.
 
-```
+```cpp
 GetExecutionEnd() - GetExecutionStart()
 ```
 
@@ -438,7 +438,7 @@ and computed from inside the check result.
 
 The difference between the two deltas is called `check latency`.
 
-```
+```cpp
 (GetScheduleEnd() - GetScheduleStart()) - CalculateExecutionTime()
 ```
 
@@ -451,71 +451,7 @@ The severity value is pre-calculated for visualization interfaces
 such as Icinga Web which sorts the problem dashboard by severity by default.
 
 The higher the severity number is, the more important the problem is.
-
-Flags:
-
-```
-/**
- * Severity Flags
- *
- * @ingroup icinga
- */
-enum SeverityFlag
-{
-	SeverityFlagDowntime = 1,
-	SeverityFlagAcknowledgement = 2,
-	SeverityFlagHostDown = 4,
-	SeverityFlagUnhandled = 8,
-	SeverityFlagPending = 16,
-	SeverityFlagWarning = 32,
-	SeverityFlagUnknown = 64,
-	SeverityFlagCritical = 128,
-};
-```
-
-
-Host:
-
-```
-	/* OK/Warning = Up, Critical/Unknown = Down */
-	if (!HasBeenChecked())
-		severity |= SeverityFlagPending;
-	else if (state == ServiceUnknown)
-		severity |= SeverityFlagCritical;
-	else if (state == ServiceCritical)
-		severity |= SeverityFlagCritical;
-
-	if (IsInDowntime())
-		severity |= SeverityFlagDowntime;
-	else if (IsAcknowledged())
-		severity |= SeverityFlagAcknowledgement;
-	else
-		severity |= SeverityFlagUnhandled;
-```
-
-
-Service:
-
-```
-	if (!HasBeenChecked())
-		severity |= SeverityFlagPending;
-	else if (state == ServiceWarning)
-		severity |= SeverityFlagWarning;
-	else if (state == ServiceUnknown)
-		severity |= SeverityFlagUnknown;
-	else if (state == ServiceCritical)
-		severity |= SeverityFlagCritical;
-
-	if (IsInDowntime())
-		severity |= SeverityFlagDowntime;
-	else if (IsAcknowledged())
-		severity |= SeverityFlagAcknowledgement;
-	else if (m_Host->GetProblem())
-		severity |= SeverityFlagHostDown;
-	else
-		severity |= SeverityFlagUnhandled;
-```
-
+However, the formula can change across Icinga 2 releases.
 
 
 ## Cluster <a id="technical-concepts-cluster"></a>
@@ -702,7 +638,7 @@ This index is used to lookup the corresponding endpoint in the connected endpoin
 including the local endpoint. Whether the local endpoint is equal to the selected endpoint,
 or not, this sets the authority to `true` or `false`.
 
-```
+```cpp
 authority = endpoints[Utility::SDBM(object->GetName()) % endpoints.size()] == my_endpoint;
 ```
 
@@ -1106,7 +1042,7 @@ RelayMessageOne() takes care of the routing. This involves fetching the targetZo
 
 With passing the `origin` the following condition prevents sending a message back to sender:
 
-```
+```cpp
 if (origin && origin->FromClient && targetEndpoint == origin->FromClient->GetEndpoint()) {
 ```
 
@@ -1286,7 +1222,10 @@ params    | Dictionary
 
 ##### Params
 
-Currently empty.
+Key                  | Type        | Description
+---------------------|-------------|------------------
+capabilities         | Number      | Bitmask, see `lib/remote/apilistener.hpp`.
+version              | Number      | Icinga 2 version, e.g. 21300 for v2.13.0.
 
 ##### Functions
 
@@ -1397,7 +1336,7 @@ Message updates will be dropped when:
 * Checkable does not exist.
 * Origin endpoint's zone is not allowed to access this checkable.
 
-#### event::SuppressedNotifications <a id="technical-concepts-json-rpc-messages-event-setsupressednotifications"></a>
+#### event::SetLastCheckStarted <a id="technical-concepts-json-rpc-messages-event-setlastcheckstarted"></a>
 
 > Location: `clusterevents.cpp`
 
@@ -1406,7 +1345,41 @@ Message updates will be dropped when:
 Key       | Value
 ----------|---------
 jsonrpc   | 2.0
-method    | event::SuppressedNotifications
+method    | event::SetLastCheckStarted
+params    | Dictionary
+
+##### Params
+
+Key                  | Type      | Description
+---------------------|-----------|------------------
+host                 | String    | Host name
+service              | String    | Service name
+last\_check\_started | Timestamp | Last check's start time as UNIX timestamp.
+
+##### Functions
+
+Event Sender: `Checkable::OnLastCheckStartedChanged`
+Event Receiver: `LastCheckStartedChangedAPIHandler`
+
+##### Permissions
+
+The receiver will not process messages from not configured endpoints.
+
+Message updates will be dropped when:
+
+* Checkable does not exist.
+* Origin endpoint's zone is not allowed to access this checkable.
+
+#### event::SetSuppressedNotifications <a id="technical-concepts-json-rpc-messages-event-setsupressednotifications"></a>
+
+> Location: `clusterevents.cpp`
+
+##### Message Body
+
+Key       | Value
+----------|---------
+jsonrpc   | 2.0
+method    | event::SetSuppressedNotifications
 params    | Dictionary
 
 ##### Params
@@ -1422,6 +1395,8 @@ supressed\_notifications | Number 	 | Bitmask for suppressed notifications.
 Event Sender: `Checkable::OnSuppressedNotificationsChanged`
 Event Receiver: `SuppressedNotificationsChangedAPIHandler`
 
+Used to sync the notification state of a host or service object within the same HA zone.
+
 ##### Permissions
 
 The receiver will not process messages from not configured endpoints.
@@ -1429,7 +1404,42 @@ The receiver will not process messages from not configured endpoints.
 Message updates will be dropped when:
 
 * Checkable does not exist.
-* Origin endpoint's zone is not allowed to access this checkable.
+* Origin endpoint is not within the local zone.
+
+#### event::SetSuppressedNotificationTypes <a id="technical-concepts-json-rpc-messages-event-setsuppressednotificationtypes"></a>
+
+> Location: `clusterevents.cpp`
+
+##### Message Body
+
+Key       | Value
+----------|---------
+jsonrpc   | 2.0
+method    | event::SetSuppressedNotificationTypes
+params    | Dictionary
+
+##### Params
+
+Key         		 | Type   | Description
+-------------------------|--------|------------------
+notification             | String | Notification name
+supressed\_notifications | Number | Bitmask for suppressed notifications.
+
+Used to sync the state of a notification object within the same HA zone.
+
+##### Functions
+
+Event Sender: `Notification::OnSuppressedNotificationsChanged`
+Event Receiver: `SuppressedNotificationTypesChangedAPIHandler`
+
+##### Permissions
+
+The receiver will not process messages from not configured endpoints.
+
+Message updates will be dropped when:
+
+* Notification does not exist.
+* Origin endpoint is not within the local zone.
 
 
 #### event::SetNextNotification <a id="technical-concepts-json-rpc-messages-event-setnextnotification"></a>
@@ -1635,6 +1645,9 @@ text      | String        | Notification text
 Event Sender: `Checkable::OnNotificationsRequested`
 Event Receiver: `SendNotificationsAPIHandler`
 
+Signals that notifications have to be sent within the same HA zone. This is relevant if the checkable and its
+notifications are active on different endpoints.
+
 ##### Permissions
 
 The receiver will not process messages from not configured endpoints.
@@ -1642,7 +1655,7 @@ The receiver will not process messages from not configured endpoints.
 Message updates will be dropped when:
 
 * Checkable does not exist.
-* Origin endpoint's zone the same as the receiver. This binds notification messages to the HA zone.
+* Origin endpoint is not within the local zone.
 
 #### event::NotificationSentUser <a id="technical-concepts-json-rpc-messages-event-notificationsentuser"></a>
 
@@ -1750,11 +1763,14 @@ command\_type  | String        | `check_command` or `event_command`.
 command        | String        | CheckCommand or EventCommand name.
 check\_timeout | Number        | Check timeout of the checkable object, if specified as `check_timeout` attribute.
 macros         | Dictionary    | Command arguments as key/value pairs for remote execution.
+endpoint       | String        | The endpoint to execute the command on.
+deadline       | Number        | A Unix timestamp indicating the execution deadline
+source         | String        | The execution UUID
 
 
 ##### Functions
 
-**Event Sender:** This gets constructed directly in `Checkable::ExecuteCheck()` or `Checkable::ExecuteEventHandler()` when a remote command endpoint is configured.
+**Event Sender:** This gets constructed directly in `Checkable::ExecuteCheck()`, `Checkable::ExecuteEventHandler()` or `ApiActions::ExecuteCommand()` when a remote command endpoint is configured.
 
 * `Get{CheckCommand,EventCommand}()->Execute()` simulates an execution and extracts all command arguments into the `macro` dictionary (inside lib/methods tasks).
 * When the endpoint is connected, the message is constructed and sent directly.
@@ -1764,6 +1780,7 @@ macros         | Dictionary    | Command arguments as key/value pairs for remote
 
 Special handling, calls `ClusterEvents::EnqueueCheck()` for command endpoint checks.
 This function enqueues check tasks into a queue which is controlled in `RemoteCheckThreadProc()`.
+If the `endpoint` parameter is specified and is not equal to the local endpoint then the message is forwarded to the correct endpoint zone. 
 
 ##### Permissions
 
@@ -1784,6 +1801,111 @@ Returns UNKNOWN as check result to the sender
 The returned messages are synced directly to the sender's endpoint, no cluster broadcast.
 
 > **Note**: EventCommand errors are just logged on the remote endpoint.
+
+#### event::UpdateExecutions <a id="technical-concepts-json-rpc-messages-event-updateexecutions"></a>
+
+> Location: `clusterevents.cpp`
+
+##### Message Body
+
+Key       | Value
+----------|---------
+jsonrpc   | 2.0
+method    | event::UpdateExecutions
+params    | Dictionary
+
+##### Params
+
+Key            | Type          | Description
+---------------|---------------|------------------
+host           | String        | Host name.
+service        | String        | Service name.
+executions     | Dictionary    | Executions to be updated
+
+##### Functions
+
+**Event Sender:** `ClusterEvents::ExecutedCommandAPIHandler`, `ClusterEvents::UpdateExecutionsAPIHandler`, `ApiActions::ExecuteCommand`
+**Event Receiver:** `ClusterEvents::UpdateExecutionsAPIHandler` 
+
+##### Permissions
+
+The receiver will not process messages from not configured endpoints.
+
+Message updates will be dropped when:
+
+* Checkable does not exist.
+* Origin endpoint's zone is not allowed to access this checkable.
+
+#### event::ExecutedCommand <a id="technical-concepts-json-rpc-messages-event-executedcommand"></a>
+
+> Location: `clusterevents.cpp`
+
+##### Message Body
+
+Key       | Value
+----------|---------
+jsonrpc   | 2.0
+method    | event::ExecutedCommand
+params    | Dictionary
+
+##### Params
+
+Key            | Type          | Description
+---------------|---------------|------------------
+host           | String        | Host name.
+service        | String        | Service name.
+execution      | String        | The execution ID executed.
+exitStatus     | Number        | The command exit status. 
+output         | String        | The command output.
+start          | Number        | The unix timestamp at the start of the command execution
+end            | Number        | The unix timestamp at the end of the command execution
+
+##### Functions
+
+**Event Sender:** `ClusterEvents::ExecuteCheckFromQueue`, `ClusterEvents::ExecuteCommandAPIHandler`
+**Event Receiver:** `ClusterEvents::ExecutedCommandAPIHandler` 
+
+##### Permissions
+
+The receiver will not process messages from not configured endpoints.
+
+Message updates will be dropped when:
+
+* Checkable does not exist.
+* Origin endpoint's zone is not allowed to access this checkable.
+
+#### event::SetRemovalInfo <a id="technical-concepts-json-rpc-messages-event-setremovalinfo"></a>
+
+> Location: `clusterevents.cpp`
+
+##### Message Body
+
+Key       | Value
+----------|---------
+jsonrpc   | 2.0
+method    | event::SetRemovalInfo
+params    | Dictionary
+
+##### Params
+
+Key            | Type        | Description
+---------------|-------------|---------------------------------
+object\_type   | String      | Object type (`"Comment"` or `"Downtime"`)
+object\_name   | String      | Object name
+removed\_by    | String      | Name of the removal requestor
+remove\_time   | Timestamp   | Time of the remove operation
+
+##### Functions
+
+**Event Sender**: `Comment::OnRemovalInfoChanged` and `Downtime::OnRemovalInfoChanged`
+**Event Receiver**: `SetRemovalInfoAPIHandler`
+
+This message is used to synchronize information about manual comment and downtime removals before deleting the
+corresponding object.
+
+##### Permissions
+
+This message is only accepted from the local zone and from parent zones.
 
 #### config::Update <a id="technical-concepts-json-rpc-messages-config-update"></a>
 

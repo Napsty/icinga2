@@ -63,7 +63,7 @@ void ConfigPackagesHandler::HandleGet(
 	ArrayData results;
 
 	{
-		boost::mutex::scoped_lock lock(ConfigPackageUtility::GetStaticPackageMutex());
+		std::unique_lock<std::mutex> lock(ConfigPackageUtility::GetStaticPackageMutex());
 
 		for (const String& package : packages) {
 			String activeStage;
@@ -105,13 +105,13 @@ void ConfigPackagesHandler::HandlePost(
 
 	String packageName = HttpUtility::GetLastParameter(params, "package");
 
-	if (!ConfigPackageUtility::ValidateName(packageName)) {
+	if (!ConfigPackageUtility::ValidatePackageName(packageName)) {
 		HttpUtility::SendJsonError(response, params, 400, "Invalid package name '" + packageName + "'.");
 		return;
 	}
 
 	try {
-		boost::mutex::scoped_lock lock(ConfigPackageUtility::GetStaticPackageMutex());
+		std::unique_lock<std::mutex> lock(ConfigPackageUtility::GetStaticPackageMutex());
 
 		ConfigPackageUtility::CreatePackage(packageName);
 	} catch (const std::exception& ex) {
@@ -151,7 +151,7 @@ void ConfigPackagesHandler::HandleDelete(
 
 	String packageName = HttpUtility::GetLastParameter(params, "package");
 
-	if (!ConfigPackageUtility::ValidateName(packageName)) {
+	if (!ConfigPackageUtility::ValidatePackageName(packageName)) {
 		HttpUtility::SendJsonError(response, params, 400, "Invalid package name '" + packageName + "'.");
 		return;
 	}

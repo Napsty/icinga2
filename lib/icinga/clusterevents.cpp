@@ -24,7 +24,9 @@ INITIALIZE_ONCE(&ClusterEvents::StaticInitialize);
 
 REGISTER_APIFUNCTION(CheckResult, event, &ClusterEvents::CheckResultAPIHandler);
 REGISTER_APIFUNCTION(SetNextCheck, event, &ClusterEvents::NextCheckChangedAPIHandler);
+REGISTER_APIFUNCTION(SetLastCheckStarted, event, &ClusterEvents::LastCheckStartedChangedAPIHandler);
 REGISTER_APIFUNCTION(SetSuppressedNotifications, event, &ClusterEvents::SuppressedNotificationsChangedAPIHandler);
+REGISTER_APIFUNCTION(SetSuppressedNotificationTypes, event, &ClusterEvents::SuppressedNotificationTypesChangedAPIHandler);
 REGISTER_APIFUNCTION(SetNextNotification, event, &ClusterEvents::NextNotificationChangedAPIHandler);
 REGISTER_APIFUNCTION(SetForceNextCheck, event, &ClusterEvents::ForceNextCheckChangedAPIHandler);
 REGISTER_APIFUNCTION(SetForceNextNotification, event, &ClusterEvents::ForceNextNotificationChangedAPIHandler);
@@ -34,12 +36,17 @@ REGISTER_APIFUNCTION(ExecuteCommand, event, &ClusterEvents::ExecuteCommandAPIHan
 REGISTER_APIFUNCTION(SendNotifications, event, &ClusterEvents::SendNotificationsAPIHandler);
 REGISTER_APIFUNCTION(NotificationSentUser, event, &ClusterEvents::NotificationSentUserAPIHandler);
 REGISTER_APIFUNCTION(NotificationSentToAllUsers, event, &ClusterEvents::NotificationSentToAllUsersAPIHandler);
+REGISTER_APIFUNCTION(ExecutedCommand, event, &ClusterEvents::ExecutedCommandAPIHandler);
+REGISTER_APIFUNCTION(UpdateExecutions, event, &ClusterEvents::UpdateExecutionsAPIHandler);
+REGISTER_APIFUNCTION(SetRemovalInfo, event, &ClusterEvents::SetRemovalInfoAPIHandler);
 
 void ClusterEvents::StaticInitialize()
 {
 	Checkable::OnNewCheckResult.connect(&ClusterEvents::CheckResultHandler);
 	Checkable::OnNextCheckChanged.connect(&ClusterEvents::NextCheckChangedHandler);
+	Checkable::OnLastCheckStartedChanged.connect(&ClusterEvents::LastCheckStartedChangedHandler);
 	Checkable::OnSuppressedNotificationsChanged.connect(&ClusterEvents::SuppressedNotificationsChangedHandler);
+	Notification::OnSuppressedNotificationsChanged.connect(&ClusterEvents::SuppressedNotificationTypesChangedHandler);
 	Notification::OnNextNotificationChanged.connect(&ClusterEvents::NextNotificationChangedHandler);
 	Checkable::OnForceNextCheckChanged.connect(&ClusterEvents::ForceNextCheckChangedHandler);
 	Checkable::OnForceNextNotificationChanged.connect(&ClusterEvents::ForceNextNotificationChangedHandler);
@@ -49,6 +56,9 @@ void ClusterEvents::StaticInitialize()
 
 	Checkable::OnAcknowledgementSet.connect(&ClusterEvents::AcknowledgementSetHandler);
 	Checkable::OnAcknowledgementCleared.connect(&ClusterEvents::AcknowledgementClearedHandler);
+
+	Comment::OnRemovalInfoChanged.connect(&ClusterEvents::SetRemovalInfoHandler);
+	Downtime::OnRemovalInfoChanged.connect(&ClusterEvents::SetRemovalInfoHandler);
 }
 
 Dictionary::Ptr ClusterEvents::MakeCheckResultMessage(const Checkable::Ptr& checkable, const CheckResult::Ptr& cr)
@@ -234,6 +244,68 @@ Value ClusterEvents::NextCheckChangedAPIHandler(const MessageOrigin::Ptr& origin
 	return Empty;
 }
 
+void ClusterEvents::LastCheckStartedChangedHandler(const Checkable::Ptr& checkable, const MessageOrigin::Ptr& origin)
+{
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return;
+
+	Host::Ptr host;
+	Service::Ptr service;
+	tie(host, service) = GetHostService(checkable);
+
+	Dictionary::Ptr params = new Dictionary();
+	params->Set("host", host->GetName());
+	if (service)
+		params->Set("service", service->GetShortName());
+	params->Set("last_check_started", checkable->GetLastCheckStarted());
+
+	Dictionary::Ptr message = new Dictionary();
+	message->Set("jsonrpc", "2.0");
+	message->Set("method", "event::SetLastCheckStarted");
+	message->Set("params", params);
+
+	listener->RelayMessage(origin, checkable, message, true);
+}
+
+Value ClusterEvents::LastCheckStartedChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
+{
+	Endpoint::Ptr endpoint = origin->FromClient->GetEndpoint();
+
+	if (!endpoint) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'last_check_started changed' message from '" << origin->FromClient->GetIdentity() << "': Invalid endpoint origin (client not allowed).";
+		return Empty;
+	}
+
+	Host::Ptr host = Host::GetByName(params->Get("host"));
+
+	if (!host)
+		return Empty;
+
+	Checkable::Ptr checkable;
+
+	if (params->Contains("service"))
+		checkable = host->GetServiceByShortName(params->Get("service"));
+	else
+		checkable = host;
+
+	if (!checkable)
+		return Empty;
+
+	if (origin->FromZone && !origin->FromZone->CanAccessObject(checkable)) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'last_check_started changed' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Unauthorized access.";
+		return Empty;
+	}
+
+	checkable->SetLastCheckStarted(params->Get("last_check_started"), false, origin);
+
+	return Empty;
+}
+
 void ClusterEvents::SuppressedNotificationsChangedHandler(const Checkable::Ptr& checkable, const MessageOrigin::Ptr& origin)
 {
 	ApiListener::Ptr listener = ApiListener::GetInstance();
@@ -256,7 +328,7 @@ void ClusterEvents::SuppressedNotificationsChangedHandler(const Checkable::Ptr& 
 	message->Set("method", "event::SetSuppressedNotifications");
 	message->Set("params", params);
 
-	listener->RelayMessage(origin, checkable, message, true);
+	listener->RelayMessage(origin, nullptr, message, true);
 }
 
 Value ClusterEvents::SuppressedNotificationsChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
@@ -284,7 +356,7 @@ Value ClusterEvents::SuppressedNotificationsChangedAPIHandler(const MessageOrigi
 	if (!checkable)
 		return Empty;
 
-	if (origin->FromZone && !origin->FromZone->CanAccessObject(checkable)) {
+	if (origin->FromZone && origin->FromZone != Zone::GetLocalZone()) {
 		Log(LogNotice, "ClusterEvents")
 			<< "Discarding 'suppressed notifications changed' message for checkable '" << checkable->GetName()
 			<< "' from '" << origin->FromClient->GetIdentity() << "': Unauthorized access.";
@@ -292,6 +364,52 @@ Value ClusterEvents::SuppressedNotificationsChangedAPIHandler(const MessageOrigi
 	}
 
 	checkable->SetSuppressedNotifications(params->Get("suppressed_notifications"), false, origin);
+
+	return Empty;
+}
+
+void ClusterEvents::SuppressedNotificationTypesChangedHandler(const Notification::Ptr& notification, const MessageOrigin::Ptr& origin)
+{
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return;
+
+	Dictionary::Ptr params = new Dictionary();
+	params->Set("notification", notification->GetName());
+	params->Set("suppressed_notifications", notification->GetSuppressedNotifications());
+
+	Dictionary::Ptr message = new Dictionary();
+	message->Set("jsonrpc", "2.0");
+	message->Set("method", "event::SetSuppressedNotificationTypes");
+	message->Set("params", params);
+
+	listener->RelayMessage(origin, nullptr, message, true);
+}
+
+Value ClusterEvents::SuppressedNotificationTypesChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
+{
+	Endpoint::Ptr endpoint = origin->FromClient->GetEndpoint();
+
+	if (!endpoint) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'suppressed notifications changed' message from '" << origin->FromClient->GetIdentity() << "': Invalid endpoint origin (client not allowed).";
+		return Empty;
+	}
+
+	auto notification (Notification::GetByName(params->Get("notification")));
+
+	if (!notification)
+		return Empty;
+
+	if (origin->FromZone && origin->FromZone != Zone::GetLocalZone()) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'suppressed notification types changed' message for notification '" << notification->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Unauthorized access.";
+		return Empty;
+	}
+
+	notification->SetSuppressedNotifications(params->Get("suppressed_notifications"), false, origin);
 
 	return Empty;
 }
@@ -617,6 +735,91 @@ Value ClusterEvents::AcknowledgementClearedAPIHandler(const MessageOrigin::Ptr& 
 
 Value ClusterEvents::ExecuteCommandAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
 {
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return Empty;
+
+	if (!origin->IsLocal()) {
+		Endpoint::Ptr endpoint = origin->FromClient->GetEndpoint();
+
+		/* Discard messages from anonymous clients */
+		if (!endpoint) {
+			Log(LogNotice, "ClusterEvents") << "Discarding 'execute command' message from '"
+				<< origin->FromClient->GetIdentity() << "': Invalid endpoint origin (client not allowed).";
+			return Empty;
+		}
+
+		Zone::Ptr originZone = endpoint->GetZone();
+
+		Zone::Ptr localZone = Zone::GetLocalZone();
+		bool fromLocalZone = originZone == localZone;
+
+		Zone::Ptr parentZone = localZone->GetParent();
+		bool fromParentZone = parentZone && originZone == parentZone;
+
+		if (!fromLocalZone && !fromParentZone) {
+			Log(LogNotice, "ClusterEvents") << "Discarding 'execute command' message from '"
+				<< origin->FromClient->GetIdentity() << "': Unauthorized access.";
+			return Empty;
+		}
+	}
+
+	if (params->Contains("endpoint")) {
+		Endpoint::Ptr execEndpoint = Endpoint::GetByName(params->Get("endpoint"));
+
+		if (execEndpoint != Endpoint::GetLocalEndpoint()) {
+			Zone::Ptr endpointZone = execEndpoint->GetZone();
+			Zone::Ptr localZone = Zone::GetLocalZone();
+
+			if (!endpointZone->IsChildOf(localZone)) {
+				return Empty;
+			}
+
+			/* Check if the child endpoints have Icinga version >= 2.13 */
+			for (const Zone::Ptr &zone : ConfigType::GetObjectsByType<Zone>()) {
+				/* Fetch immediate child zone members */
+				if (zone->GetParent() == localZone && zone->CanAccessObject(endpointZone)) {
+					std::set<Endpoint::Ptr> endpoints = zone->GetEndpoints();
+
+					for (const Endpoint::Ptr &childEndpoint : endpoints) {
+						if (!(childEndpoint->GetCapabilities() & (uint_fast64_t)ApiCapabilities::ExecuteArbitraryCommand)) {
+							double now = Utility::GetTime();
+							Dictionary::Ptr executedParams = new Dictionary();
+							executedParams->Set("execution", params->Get("source"));
+							executedParams->Set("host", params->Get("host"));
+
+							if (params->Contains("service"))
+								executedParams->Set("service", params->Get("service"));
+
+							executedParams->Set("exit", 126);
+							executedParams->Set("output",
+								"Endpoint '" + childEndpoint->GetName() + "' doesn't support executing arbitrary commands.");
+							executedParams->Set("start", now);
+							executedParams->Set("end", now);
+
+							Dictionary::Ptr executedMessage = new Dictionary();
+							executedMessage->Set("jsonrpc", "2.0");
+							executedMessage->Set("method", "event::ExecutedCommand");
+							executedMessage->Set("params", executedParams);
+
+							listener->RelayMessage(nullptr, nullptr, executedMessage, true);
+							return Empty;
+						}
+					}
+				}
+			}
+
+			Dictionary::Ptr execMessage = new Dictionary();
+			execMessage->Set("jsonrpc", "2.0");
+			execMessage->Set("method", "event::ExecuteCommand");
+			execMessage->Set("params", params);
+
+			listener->RelayMessage(origin, endpointZone, execMessage, true);
+			return Empty;
+		}
+	}
+
 	EnqueueCheck(origin, params);
 
 	return Empty;
@@ -936,6 +1139,234 @@ Value ClusterEvents::NotificationSentToAllUsersAPIHandler(const MessageOrigin::P
 	notification->SetNotifiedProblemUsers(new Array(std::move(notifiedProblemUsers)));
 
 	Checkable::OnNotificationSentToAllUsers(notification, checkable, users, type, cr, author, text, origin);
+
+	return Empty;
+}
+
+Value ClusterEvents::ExecutedCommandAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
+{
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return Empty;
+
+	Endpoint::Ptr endpoint;
+
+	if (origin->FromClient) {
+		endpoint = origin->FromClient->GetEndpoint();
+	} else if (origin->IsLocal()) {
+		endpoint = Endpoint::GetLocalEndpoint();
+	}
+
+	if (!endpoint) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message from '" << origin->FromClient->GetIdentity()
+			<< "': Invalid endpoint origin (client not allowed).";
+
+		return Empty;
+	}
+
+	Host::Ptr host = Host::GetByName(params->Get("host"));
+
+	if (!host)
+		return Empty;
+
+	Checkable::Ptr checkable;
+
+	if (params->Contains("service"))
+		checkable = host->GetServiceByShortName(params->Get("service"));
+	else
+		checkable = host;
+
+	if (!checkable)
+		return Empty;
+
+	ObjectLock oLock (checkable);
+
+	if (origin->FromZone && !origin->FromZone->CanAccessObject(checkable)) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Unauthorized access.";
+		return Empty;
+	}
+
+	if (!params->Contains("execution")) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Execution UUID missing.";
+		return Empty;
+	}
+
+	String uuid = params->Get("execution");
+
+	Dictionary::Ptr executions = checkable->GetExecutions();
+
+	if (!executions) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Execution '" << uuid << "' missing.";
+		return Empty;
+	}
+
+	Dictionary::Ptr execution = executions->Get(uuid);
+
+	if (!execution) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Execution '" << uuid << "' missing.";
+		return Empty;
+	}
+
+	if (params->Contains("exit"))
+		execution->Set("exit", params->Get("exit"));
+
+	if (params->Contains("output"))
+		execution->Set("output", params->Get("output"));
+
+	if (params->Contains("start"))
+		execution->Set("start", params->Get("start"));
+
+	if (params->Contains("end"))
+		execution->Set("end", params->Get("end"));
+
+	execution->Remove("pending");
+
+	/* Broadcast the update */
+	Dictionary::Ptr executionsToBroadcast = new Dictionary();
+	executionsToBroadcast->Set(uuid, execution);
+	Dictionary::Ptr updateParams = new Dictionary();
+	updateParams->Set("host", host->GetName());
+
+	if (params->Contains("service"))
+		updateParams->Set("service", params->Get("service"));
+
+	updateParams->Set("executions", executionsToBroadcast);
+
+	Dictionary::Ptr updateMessage = new Dictionary();
+	updateMessage->Set("jsonrpc", "2.0");
+	updateMessage->Set("method", "event::UpdateExecutions");
+	updateMessage->Set("params", updateParams);
+
+	listener->RelayMessage(nullptr, checkable, updateMessage, true);
+
+	return Empty;
+}
+
+Value ClusterEvents::UpdateExecutionsAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
+{
+	Endpoint::Ptr endpoint = origin->FromClient->GetEndpoint();
+
+	if (!endpoint) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message from '" << origin->FromClient->GetIdentity()
+			<< "': Invalid endpoint origin (client not allowed).";
+
+		return Empty;
+	}
+
+	Host::Ptr host = Host::GetByName(params->Get("host"));
+
+	if (!host)
+		return Empty;
+
+	Checkable::Ptr checkable;
+
+	if (params->Contains("service"))
+		checkable = host->GetServiceByShortName(params->Get("service"));
+	else
+		checkable = host;
+
+	if (!checkable)
+		return Empty;
+
+	ObjectLock oLock (checkable);
+
+	if (origin->FromZone && !origin->FromZone->CanAccessObject(checkable)) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'update executions API handler' message for checkable '" << checkable->GetName()
+			<< "' from '" << origin->FromClient->GetIdentity() << "': Unauthorized access.";
+		return Empty;
+	}
+
+	Dictionary::Ptr executions = checkable->GetExecutions();
+
+	if (!executions)
+		executions = new Dictionary();
+
+	Dictionary::Ptr newExecutions = params->Get("executions");
+	newExecutions->CopyTo(executions);
+	checkable->SetExecutions(executions);
+
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return Empty;
+
+	Dictionary::Ptr updateMessage = new Dictionary();
+	updateMessage->Set("jsonrpc", "2.0");
+	updateMessage->Set("method", "event::UpdateExecutions");
+	updateMessage->Set("params", params);
+
+	listener->RelayMessage(origin, Zone::GetLocalZone(), updateMessage, true);
+
+	return Empty;
+}
+
+void ClusterEvents::SetRemovalInfoHandler(const ConfigObject::Ptr& obj, const String& removedBy, double removeTime,
+	const MessageOrigin::Ptr& origin)
+{
+	ApiListener::Ptr listener = ApiListener::GetInstance();
+
+	if (!listener)
+		return;
+
+	Dictionary::Ptr params = new Dictionary();
+	params->Set("object_type", obj->GetReflectionType()->GetName());
+	params->Set("object_name", obj->GetName());
+	params->Set("removed_by", removedBy);
+	params->Set("remove_time", removeTime);
+
+	Dictionary::Ptr message = new Dictionary();
+	message->Set("jsonrpc", "2.0");
+	message->Set("method", "event::SetRemovalInfo");
+	message->Set("params", params);
+
+	listener->RelayMessage(origin, obj, message, true);
+}
+
+Value ClusterEvents::SetRemovalInfoAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params)
+{
+	Endpoint::Ptr endpoint = origin->FromClient->GetEndpoint();
+
+	if (!endpoint || (origin->FromZone && !Zone::GetLocalZone()->IsChildOf(origin->FromZone))) {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'set removal info' message from '" << origin->FromClient->GetIdentity()
+			<< "': Invalid endpoint origin (client not allowed).";
+		return Empty;
+	}
+
+	String objectType = params->Get("object_type");
+	String objectName = params->Get("object_name");
+	String removedBy = params->Get("removed_by");
+	double removeTime = params->Get("remove_time");
+
+	if (objectType == Comment::GetTypeName()) {
+		Comment::Ptr comment = Comment::GetByName(objectName);
+
+		if (comment) {
+			comment->SetRemovalInfo(removedBy, removeTime, origin);
+		}
+	} else if (objectType == Downtime::GetTypeName()) {
+		Downtime::Ptr downtime = Downtime::GetByName(objectName);
+
+		if (downtime) {
+			downtime->SetRemovalInfo(removedBy, removeTime, origin);
+		}
+	} else {
+		Log(LogNotice, "ClusterEvents")
+			<< "Discarding 'set removal info' message from '" << origin->FromClient->GetIdentity()
+			<< "': Unknown object type.";
+	}
 
 	return Empty;
 }

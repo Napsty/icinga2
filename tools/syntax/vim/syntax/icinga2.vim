@@ -57,10 +57,11 @@ syn keyword		icinga2ObjType		Comment Dependency Downtime ElasticsearchWriter
 syn keyword		icinga2ObjType		Endpoint EventCommand ExternalCommandListener
 syn keyword		icinga2ObjType		FileLogger GelfWriter GraphiteWriter Host HostGroup
 syn keyword		icinga2ObjType		IcingaApplication IdoMysqlConnection IdoPgsqlConnection
-syn keyword		icinga2ObjType		InfluxdbWriter LivestatusListener Notification NotificationCommand
+syn keyword		icinga2ObjType		InfluxdbWriter Influxdb2Writer JournaldLogger
+syn keyword		icinga2ObjType		LivestatusListener Notification NotificationCommand
 syn keyword		icinga2ObjType		NotificationComponent OpenTsdbWriter PerfdataWriter
 syn keyword		icinga2ObjType		ScheduledDowntime Service ServiceGroup SyslogLogger
-syn keyword		icinga2ObjType		TimePeriod User UserGroup Zone
+syn keyword		icinga2ObjType		TimePeriod User UserGroup WindowsEventLogLogger Zone
 
 " Object/Template marker (simplified)
 syn match		icinga2ObjDef		"\(object\|template\)[ \t]\+.*"

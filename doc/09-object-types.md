@@ -200,7 +200,7 @@ Configuration Attributes:
   parent\_service\_name     | Object name           | **Optional.** The parent service. If omitted, this dependency object is treated as host dependency.
   child\_host\_name         | Object name           | **Required.** The child host.
   child\_service\_name      | Object name           | **Optional.** The child service. If omitted, this dependency object is treated as host dependency.
-  disable\_checks           | Boolean               | **Optional.** Whether to disable checks when this dependency fails. Defaults to false.
+  disable\_checks           | Boolean               | **Optional.** Whether to disable checks (i.e., don't schedule active checks and drop passive results) when this dependency fails. Defaults to false.
   disable\_notifications    | Boolean               | **Optional.** Whether to disable notifications when this dependency fails. Defaults to true.
   ignore\_soft\_states      | Boolean               | **Optional.** Whether to ignore soft states for the reachability calculation. Defaults to true.
   period                    | Object name           | **Optional.** Time period object during which this dependency is enabled.
@@ -359,6 +359,7 @@ Configuration Attributes:
   event\_command            | Object name           | **Optional.** The name of an event command that should be executed every time the host's state changes or the host is in a `SOFT` state.
   flapping\_threshold\_high | Number                | **Optional.** Flapping upper bound in percent for a host to be considered flapping. Default `30.0`
   flapping\_threshold\_low  | Number                | **Optional.** Flapping lower bound in percent for a host to be considered  not flapping. Default `25.0`
+  flapping\_ignore\_states  | Array                 | **Optional.** A list of states that should be ignored during flapping calculation. By default no state is ignored.
   volatile                  | Boolean               | **Optional.** Treat all state changes as HARD changes. See [here](08-advanced-topics.md#volatile-services-hosts) for details. Defaults to `false`.
   zone                      | Object name           | **Optional.** The zone this object is a member of. Please read the [distributed monitoring](06-distributed-monitoring.md#distributed-monitoring) chapter for details.
   command\_endpoint         | Object name           | **Optional.** The endpoint where commands are executed on.
@@ -475,7 +476,7 @@ Configuration Attributes:
   vars                      | Dictionary            | **Optional.** A dictionary containing custom variables that are specific to this notification object.
   users                     | Array of object names | **Required.** A list of user names who should be notified. **Optional.** if the `user_groups` attribute is set.
   user\_groups              | Array of object names | **Required.** A list of user group names who should be notified. **Optional.** if the `users` attribute is set.
-  times                     | Dictionary            | **Optional.** A dictionary containing `begin` and `end` attributes for the notification.
+  times                     | Dictionary            | **Optional.** A dictionary containing `begin` and `end` attributes for the notification. If `end` is set to 0, `Notifications` are disabled permanently. Please read the [notification delay](03-monitoring-basics.md#notification-delay) chapter for details.
   command                   | Object name           | **Required.** The name of the notification command which should be executed when the notification is triggered.
   interval                  | Duration              | **Optional.** The notification interval (in seconds). This interval is used for active notifications. Defaults to 30 minutes. If set to 0, [re-notifications](03-monitoring-basics.md#disable-renotification) are disabled.
   period                    | Object name           | **Optional.** The name of a time period which determines when this notification should be triggered. Not set by default (effectively 24x7).
@@ -667,6 +668,8 @@ name you specified. This means you can define more than one object
 with the same (short) name as long as one of the `host_name` and
 `service_name` attributes has a different value.
 
+See also [time zone handling](08-advanced-topics.md#timeperiods-timezones).
+
 
 ### Service <a id="objecttype-service"></a>
 
@@ -721,6 +724,7 @@ Configuration Attributes:
   enable\_flapping          | Boolean               | **Optional.** Whether flap detection is enabled. Defaults to `false`.
   flapping\_threshold\_high | Number                | **Optional.** Flapping upper bound in percent for a service to be considered flapping. `30.0`
   flapping\_threshold\_low  | Number                | **Optional.** Flapping lower bound in percent for a service to be considered  not flapping. `25.0`
+  flapping\_ignore\_states  | Array                 | **Optional.** A list of states that should be ignored during flapping calculation. By default no state is ignored.
   enable\_perfdata          | Boolean               | **Optional.** Whether performance data processing is enabled. Defaults to `true`.
   event\_command            | Object name           | **Optional.** The name of an event command that should be executed every time the service's state changes or the service is in a `SOFT` state.
   volatile                  | Boolean               | **Optional.** Treat all state changes as HARD changes. See [here](08-advanced-topics.md#volatile-services-hosts) for details. Defaults to `false`.
@@ -859,6 +863,8 @@ Runtime Attributes:
   Name                      | Type                  | Description
   --------------------------|-----------------------|----------------------------------
   is\_inside                | Boolean               | Whether we're currently inside this timeperiod.
+
+See also [time zone handling](08-advanced-topics.md#timeperiods-timezones).
 
 
 ### User <a id="objecttype-user"></a>
@@ -1089,14 +1095,15 @@ Configuration Attributes:
   ca\_path                              | String                | **Deprecated.** Path to the CA certificate file.
   ticket\_salt                          | String                | **Optional.** Private key for [CSR auto-signing](06-distributed-monitoring.md#distributed-monitoring-setup-csr-auto-signing). **Required** for a signing master instance.
   crl\_path                             | String                | **Optional.** Path to the CRL file.
-  bind\_host                            | String                | **Optional.** The IP address the api listener should be bound to. If not specified, the ApiListener is bound to `::` and listens for both IPv4 and IPv6 connections.
+  bind\_host                            | String                | **Optional.** The IP address the api listener should be bound to. If not specified, the ApiListener is bound to `::` and listens for both IPv4 and IPv6 connections or to `0.0.0.0` if IPv6 is not supported by the operating system.
   bind\_port                            | Number                | **Optional.** The port the api listener should be bound to. Defaults to `5665`.
   accept\_config                        | Boolean               | **Optional.** Accept zone configuration. Defaults to `false`.
   accept\_commands                      | Boolean               | **Optional.** Accept remote commands. Defaults to `false`.
   max\_anonymous\_clients               | Number                | **Optional.** Limit the number of anonymous client connections (not configured endpoints and signing requests).
   cipher\_list                          | String                | **Optional.** Cipher list that is allowed. For a list of available ciphers run `openssl ciphers`. Defaults to `ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:AES256-GCM-SHA384:AES128-GCM-SHA256`.
   tls\_protocolmin                      | String                | **Optional.** Minimum TLS protocol version. Since v2.11, only `TLSv1.2` is supported. Defaults to `TLSv1.2`.
-  tls\_handshake\_timeout               | Number                | **Optional.** TLS Handshake timeout. Defaults to `10s`.
+  tls\_handshake\_timeout               | Number                | **Deprecated.** TLS Handshake timeout. Defaults to `10s`.
+  connect\_timeout                      | Number                | **Optional.** Timeout for establishing new connections. Affects both incoming and outgoing connections. Within this time, the TCP and TLS handshakes must complete and either a HTTP request or an Icinga cluster connection must be initiated. Defaults to `15s`.
   access\_control\_allow\_origin        | Array                 | **Optional.** Specifies an array of origin URLs that may access the API. [(MDN docs)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS#Access-Control-Allow-Origin)
   access\_control\_allow\_credentials   | Boolean               | **Deprecated.** Indicates whether or not the actual request can be made using credentials. Defaults to `true`. [(MDN docs)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS#Access-Control-Allow-Credentials)
   access\_control\_allow\_headers       | String                | **Deprecated.** Used in response to a preflight request to indicate which HTTP headers can be used when making the actual request. Defaults to `Authorization`. [(MDN docs)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS#Access-Control-Allow-Headers)
@@ -1152,7 +1159,7 @@ to help existing Icinga 1.x users and might be useful for migration scenarios.
 
 > **Note**
 >
-> This feature is DEPRECATED and will be removed in future releases.
+> This feature is DEPRECATED and may be removed in future releases.
 > Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 Example:
@@ -1176,7 +1183,7 @@ This configuration object is available as [compatlog feature](14-features.md#com
 
 > **Note**
 >
-> This feature is DEPRECATED and will be removed in future releases.
+> This feature is DEPRECATED and may be removed in future releases.
 > Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 Example:
@@ -1231,6 +1238,7 @@ Configuration Attributes:
   username                  | String                | **Optional.** Basic auth username if Elasticsearch is hidden behind an HTTP proxy.
   password                  | String                | **Optional.** Basic auth password if Elasticsearch is hidden behind an HTTP proxy.
   enable\_tls               | Boolean               | **Optional.** Whether to use a TLS stream. Defaults to `false`. Requires an HTTP proxy.
+  insecure\_noverify        | Boolean               | **Optional.** Disable TLS peer verification.
   ca\_path                  | String                | **Optional.** Path to CA certificate to validate the remote host. Requires `enable_tls` set to `true`.
   cert\_path                | String                | **Optional.** Path to host certificate to present to the remote host for mutual verification. Requires `enable_tls` set to `true`.
   key\_path                 | String                | **Optional.** Path to host key to accompany the cert\_path. Requires `enable_tls` set to `true`.
@@ -1253,7 +1261,7 @@ This configuration object is available as [command feature](14-features.md#exter
 
 > **Note**
 >
-> This feature is DEPRECATED and will be removed in future releases.
+> This feature is DEPRECATED and may be removed in future releases.
 > Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 Example:
@@ -1318,6 +1326,7 @@ Configuration Attributes:
   enable\_send\_perfdata    | Boolean               | **Optional.** Enable performance data for 'CHECK RESULT' events.
   enable\_ha                | Boolean               | **Optional.** Enable the high availability functionality. Only valid in a [cluster setup](06-distributed-monitoring.md#distributed-monitoring-high-availability-features). Defaults to `false`.
   enable\_tls               | Boolean               | **Optional.** Whether to use a TLS stream. Defaults to `false`.
+  insecure\_noverify        | Boolean               | **Optional.** Disable TLS peer verification.
   ca\_path                  | String                | **Optional.** Path to CA certificate to validate the remote host. Requires `enable_tls` set to `true`.
   cert\_path                | String                | **Optional.** Path to host certificate to present to the remote host for mutual verification. Requires `enable_tls` set to `true`.
   key\_path                 | String                | **Optional.** Path to host key to accompany the cert\_path. Requires `enable_tls` set to `true`.
@@ -1403,6 +1412,15 @@ Configuration Attributes:
   port                      | Number                | **Optional.** Redis port for IcingaDB. Defaults to `6380`.
   path                      | String                | **Optional.** Redix unix socket path. Can be used instead of `host` and `port` attributes.
   password                  | String                | **Optional.** Redis auth password for IcingaDB.
+  enable\_tls               | Boolean               | **Optional.** Whether to use TLS.
+  cert\_path                | String                | **Optional.** Path to the certificate.
+  key\_path                 | String                | **Optional.** Path to the private key.
+  ca\_path                  | String                | **Optional.** Path to the CA certificate to use instead of the system's root CAs.
+  crl\_path                 | String                | **Optional.** Path to the CRL file.
+  cipher\_list              | String                | **Optional.** Cipher list that is allowed. For a list of available ciphers run `openssl ciphers`. Defaults to `ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-SHA384:ECDHE-RSA-AES256-SHA384:ECDHE-ECDSA-AES128-SHA256:ECDHE-RSA-AES128-SHA256:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:AES256-GCM-SHA384:AES128-GCM-SHA256`.
+  tls\_protocolmin          | String                | **Optional.** Minimum TLS protocol version. Defaults to `TLSv1.2`.
+  insecure\_noverify        | Boolean               | **Optional.** Whether not to verify the peer.
+  connect\_timeout          | Number                | **Optional.** Timeout for establishing new connections. Within this time, the TCP, TLS (if enabled) and Redis handshakes must complete. Defaults to `15s`.
 
 ### IdoMySqlConnection <a id="objecttype-idomysqlconnection"></a>
 
@@ -1462,13 +1480,18 @@ Cleanup Items:
   eventhandlers\_age              | Duration              | **Optional.** Max age for eventhandlers table rows (start\_time). Defaults to 0 (never).
   externalcommands\_age           | Duration              | **Optional.** Max age for externalcommands table rows (entry\_time). Defaults to 0 (never).
   flappinghistory\_age            | Duration              | **Optional.** Max age for flappinghistory table rows (event\_time). Defaults to 0 (never).
-  hostchecks\_age                 | Duration              | **Optional.** Max age for hostalives table rows (start\_time). Defaults to 0 (never).
+  hostchecks\_age                 | Duration              | **Optional.** Max age for hostchecks table rows (start\_time). Defaults to 0 (never).
   logentries\_age                 | Duration              | **Optional.** Max age for logentries table rows (logentry\_time). Defaults to 0 (never).
   notifications\_age              | Duration              | **Optional.** Max age for notifications table rows (start\_time). Defaults to 0 (never).
   processevents\_age              | Duration              | **Optional.** Max age for processevents table rows (event\_time). Defaults to 0 (never).
   statehistory\_age               | Duration              | **Optional.** Max age for statehistory table rows (state\_time). Defaults to 0 (never).
   servicechecks\_age              | Duration              | **Optional.** Max age for servicechecks table rows (start\_time). Defaults to 0 (never).
   systemcommands\_age             | Duration              | **Optional.** Max age for systemcommands table rows (start\_time). Defaults to 0 (never).
+
+> **Supported units**
+>
+> Supported suffixes include ms (milliseconds), s (seconds), m (minutes), h (hours) and d (days).
+> Check the [language reference](17-language-reference.md#duration-literals).
 
 Data Categories:
 
@@ -1556,13 +1579,18 @@ Cleanup Items:
   eventhandlers\_age              | Duration              | **Optional.** Max age for eventhandlers table rows (start\_time). Defaults to 0 (never).
   externalcommands\_age           | Duration              | **Optional.** Max age for externalcommands table rows (entry\_time). Defaults to 0 (never).
   flappinghistory\_age            | Duration              | **Optional.** Max age for flappinghistory table rows (event\_time). Defaults to 0 (never).
-  hostchecks\_age                 | Duration              | **Optional.** Max age for hostalives table rows (start\_time). Defaults to 0 (never).
+  hostchecks\_age                 | Duration              | **Optional.** Max age for hostchecks table rows (start\_time). Defaults to 0 (never).
   logentries\_age                 | Duration              | **Optional.** Max age for logentries table rows (logentry\_time). Defaults to 0 (never).
   notifications\_age              | Duration              | **Optional.** Max age for notifications table rows (start\_time). Defaults to 0 (never).
   processevents\_age              | Duration              | **Optional.** Max age for processevents table rows (event\_time). Defaults to 0 (never).
   statehistory\_age               | Duration              | **Optional.** Max age for statehistory table rows (state\_time). Defaults to 0 (never).
   servicechecks\_age              | Duration              | **Optional.** Max age for servicechecks table rows (start\_time). Defaults to 0 (never).
   systemcommands\_age             | Duration              | **Optional.** Max age for systemcommands table rows (start\_time). Defaults to 0 (never).
+
+> **Supported units**
+>
+> Supported suffixes include ms (milliseconds), s (seconds), m (minutes), h (hours) and d (days).
+> Check the [language reference](17-language-reference.md#duration-literals).
 
 Data Categories:
 
@@ -1597,8 +1625,9 @@ Runtime Attributes:
 
 ### InfluxdbWriter <a id="objecttype-influxdbwriter"></a>
 
-Writes check result metrics and performance data to a defined InfluxDB host.
+Writes check result metrics and performance data to a defined InfluxDB v1 host.
 This configuration object is available as [influxdb feature](14-features.md#influxdb-writer).
+For InfluxDB v2 support see the [Influxdb2Writer](#objecttype-influxdb2writer) below.
 
 Example:
 
@@ -1607,6 +1636,13 @@ object InfluxdbWriter "influxdb" {
   host = "127.0.0.1"
   port = 8086
   database = "icinga2"
+  username = "icinga2"
+  password = "icinga2"
+
+  basic_auth = {
+     username = "icinga"
+     password = "icinga"
+  }
 
   flush_threshold = 1024
   flush_interval = 10s
@@ -1636,12 +1672,14 @@ Configuration Attributes:
   database                  | String                | **Required.** InfluxDB database name. Defaults to `icinga2`.
   username                  | String                | **Optional.** InfluxDB user name. Defaults to `none`.
   password                  | String                | **Optional.** InfluxDB user password.  Defaults to `none`.
+  basic\_auth               | Dictionary            | **Optional.** Username and password for HTTP basic authentication.
   ssl\_enable               | Boolean               | **Optional.** Whether to use a TLS stream. Defaults to `false`.
+  ssl\_insecure\_noverify   | Boolean               | **Optional.** Disable TLS peer verification.
   ssl\_ca\_cert             | String                | **Optional.** Path to CA certificate to validate the remote host.
   ssl\_cert                 | String                | **Optional.** Path to host certificate to present to the remote host for mutual verification.
   ssl\_key                  | String                | **Optional.** Path to host key to accompany the ssl\_cert.
-  host\_template            | String                | **Required.** Host template to define the InfluxDB line protocol.
-  service\_template         | String                | **Required.** Service template to define the influxDB line protocol.
+  host\_template            | Dictionary            | **Required.** Host template to define the InfluxDB line protocol.
+  service\_template         | Dictionary            | **Required.** Service template to define the influxDB line protocol.
   enable\_send\_thresholds  | Boolean               | **Optional.** Whether to send warn, crit, min & max tagged data.
   enable\_send\_metadata    | Boolean               | **Optional.** Whether to send check metadata e.g. states, execution time, latency etc.
   flush\_interval           | Duration              | **Optional.** How long to buffer data points before transferring to InfluxDB. Defaults to `10s`.
@@ -1654,12 +1692,107 @@ or similar.
 
 
 
+### Influxdb2Writer <a id="objecttype-influxdb2writer"></a>
+
+Writes check result metrics and performance data to a defined InfluxDB v2 host.
+This configuration object is available as [influxdb feature](14-features.md#influxdb-writer).
+For InfluxDB v1 support see the [InfluxdbWriter](#objecttype-influxdbwriter) above.
+
+Example:
+
+```
+object Influxdb2Writer "influxdb2" {
+  host = "127.0.0.1"
+  port = 8086
+  organization = "monitoring"
+  bucket = "icinga2"
+  auth_token = "ABCDEvwxyz0189-_"
+
+  flush_threshold = 1024
+  flush_interval = 10s
+
+  host_template = {
+    measurement = "$host.check_command$"
+    tags = {
+      hostname = "$host.name$"
+    }
+  }
+  service_template = {
+    measurement = "$service.check_command$"
+    tags = {
+      hostname = "$host.name$"
+      service = "$service.name$"
+    }
+  }
+}
+```
+
+Configuration Attributes:
+
+  Name                      | Type                  | Description
+  --------------------------|-----------------------|----------------------------------
+  host                      | String                | **Required.** InfluxDB host address. Defaults to `127.0.0.1`.
+  port                      | Number                | **Required.** InfluxDB HTTP port. Defaults to `8086`.
+  organization              | String                | **Required.** InfluxDB organization name.
+  bucket                    | String                | **Required.** InfluxDB bucket name.
+  auth\_token               | String                | **Required.** InfluxDB authentication token.
+  ssl\_enable               | Boolean               | **Optional.** Whether to use a TLS stream. Defaults to `false`.
+  ssl\_insecure\_noverify   | Boolean               | **Optional.** Disable TLS peer verification.
+  ssl\_ca\_cert             | String                | **Optional.** Path to CA certificate to validate the remote host.
+  ssl\_cert                 | String                | **Optional.** Path to host certificate to present to the remote host for mutual verification.
+  ssl\_key                  | String                | **Optional.** Path to host key to accompany the ssl\_cert.
+  host\_template            | Dictionary            | **Required.** Host template to define the InfluxDB line protocol.
+  service\_template         | Dictionary            | **Required.** Service template to define the influxDB line protocol.
+  enable\_send\_thresholds  | Boolean               | **Optional.** Whether to send warn, crit, min & max tagged data.
+  enable\_send\_metadata    | Boolean               | **Optional.** Whether to send check metadata e.g. states, execution time, latency etc.
+  flush\_interval           | Duration              | **Optional.** How long to buffer data points before transferring to InfluxDB. Defaults to `10s`.
+  flush\_threshold          | Number                | **Optional.** How many data points to buffer before forcing a transfer to InfluxDB.  Defaults to `1024`.
+  enable\_ha                | Boolean               | **Optional.** Enable the high availability functionality. Only valid in a [cluster setup](06-distributed-monitoring.md#distributed-monitoring-high-availability-features). Defaults to `false`.
+
+Note: If `flush_threshold` is set too low, this will always force the feature to flush all data
+to InfluxDB. Experiment with the setting, if you are processing more than 1024 metrics per second
+or similar.
+
+
+### JournaldLogger <a id="objecttype-journaldlogger"></a>
+
+Specifies Icinga 2 logging to the systemd journal using its native interface.
+This configuration object is available as `journald` [logging feature](14-features.md#logging).
+
+Resulting journal records have fields as described in
+[journal fields](https://www.freedesktop.org/software/systemd/man/systemd.journal-fields.html),
+and an additional custom field `ICINGA2_FACILITY` with the detailed message origin (e.g. "ApiListener").
+
+Example:
+
+```
+object JournaldLogger "journald" {
+  severity = "warning"
+}
+```
+
+Configuration Attributes:
+
+Name                      | Type                  | Description
+--------------------------|-----------------------|----------------------------------
+severity                  | String                | **Optional.** The minimum syslog compatible severity for this log. Can be "debug", "notice", "information", "warning" or "critical". Defaults to "information".
+facility                  | String                | **Optional.** Defines the syslog compatible facility to use for journal entries. This can be a facility constant like `FacilityDaemon`. Defaults to `FacilityUser`.
+identifier                | String                | **Optional.** Defines the syslog compatible identifier (also known as "tag") to use for journal entries. If not given, systemd's default behavior is used and usually results in "icinga2".
+
+Facility Constants are the same as for [SyslogLogger](09-object-types.md#objecttype-sysloglogger).
+
+
 ### LiveStatusListener <a id="objecttype-livestatuslistener"></a>
 
 Livestatus API interface available as TCP or UNIX socket. Historical table queries
 require the [CompatLogger](09-object-types.md#objecttype-compatlogger) feature enabled
 pointing to the log files using the `compat_log_path` configuration attribute.
 This configuration object is available as [livestatus feature](14-features.md#setting-up-livestatus).
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 Examples:
 
@@ -1778,7 +1911,7 @@ This configuration object is available as [statusdata feature](14-features.md#st
 
 > **Note**
 >
-> This feature is DEPRECATED and will be removed in future releases.
+> This feature is DEPRECATED and may be removed in future releases.
 > Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 Example:
@@ -1816,7 +1949,7 @@ Configuration Attributes:
 
   Name                      | Type                  | Description
   --------------------------|-----------------------|----------------------------------
-  severity                  | String                | **Optional.** The minimum severity for this log. Can be "debug", "notice", "information", "warning" or "critical". Defaults to "warning".
+  severity                  | String                | **Optional.** The minimum severity for this log. Can be "debug", "notice", "information", "warning" or "critical". Defaults to "information".
   facility                  | String                | **Optional.** Defines the facility to use for syslog entries. This can be a facility constant like `FacilityDaemon`. Defaults to `FacilityUser`.
 
 Facility Constants:
@@ -1845,4 +1978,21 @@ Facility Constants:
   FacilityUucp         | LOG\_UUCP     | The UUCP system.
 
 
+### WindowsEventLogLogger <a id="objecttype-windowseventloglogger"></a>
 
+Specifies Icinga 2 logging to the Windows Event Log.
+This configuration object is available as `windowseventlog` [logging feature](14-features.md#logging).
+
+Example:
+
+```
+object WindowsEventLogLogger "windowseventlog" {
+  severity = "information"
+}
+```
+
+Configuration Attributes:
+
+  Name                      | Type                  | Description
+  --------------------------|-----------------------|----------------------------------
+  severity                  | String                | **Optional.** The minimum severity for this log. Can be "debug", "notice", "information", "warning" or "critical". Defaults to "information".

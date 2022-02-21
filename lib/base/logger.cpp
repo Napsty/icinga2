@@ -9,7 +9,11 @@
 #include "base/objectlock.hpp"
 #include "base/context.hpp"
 #include "base/scriptglobal.hpp"
+#ifdef _WIN32
+#include "base/windowseventloglogger.hpp"
+#endif /* _WIN32 */
 #include <iostream>
+#include <utility>
 
 using namespace icinga;
 
@@ -26,8 +30,9 @@ template Log& Log::operator<<(const double&);
 REGISTER_TYPE(Logger);
 
 std::set<Logger::Ptr> Logger::m_Loggers;
-boost::mutex Logger::m_Mutex;
+std::mutex Logger::m_Mutex;
 bool Logger::m_ConsoleLogEnabled = true;
+std::atomic<bool> Logger::m_EarlyLoggingEnabled (true);
 bool Logger::m_TimestampEnabled = true;
 LogSeverity Logger::m_ConsoleLogSeverity = LogInformation;
 
@@ -46,14 +51,14 @@ void Logger::Start(bool runtimeCreated)
 {
 	ObjectImpl<Logger>::Start(runtimeCreated);
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 	m_Loggers.insert(this);
 }
 
 void Logger::Stop(bool runtimeRemoved)
 {
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 		m_Loggers.erase(this);
 	}
 
@@ -62,7 +67,7 @@ void Logger::Stop(bool runtimeRemoved)
 
 std::set<Logger::Ptr> Logger::GetLoggers()
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 	return m_Loggers;
 }
 
@@ -156,6 +161,14 @@ LogSeverity Logger::GetConsoleLogSeverity()
 	return m_ConsoleLogSeverity;
 }
 
+void Logger::DisableEarlyLogging() {
+	m_EarlyLoggingEnabled = false;
+}
+
+bool Logger::IsEarlyLoggingEnabled() {
+	return m_EarlyLoggingEnabled;
+}
+
 void Logger::DisableTimestamp()
 {
 	m_TimestampEnabled = false;
@@ -201,7 +214,13 @@ Log::~Log()
 	entry.Timestamp = Utility::GetTime();
 	entry.Severity = m_Severity;
 	entry.Facility = m_Facility;
-	entry.Message = m_Buffer.str();
+
+	{
+		auto msg (m_Buffer.str());
+		msg.erase(msg.find_last_not_of("\n") + 1u);
+
+		entry.Message = std::move(msg);
+	}
 
 	if (m_Severity >= LogWarning) {
 		ContextTrace context;
@@ -235,6 +254,12 @@ Log::~Log()
 		 * then cout will not flush lines automatically. */
 		std::cout << std::flush;
 	}
+
+#ifdef _WIN32
+	if (Logger::IsEarlyLoggingEnabled() && entry.Severity >= Logger::GetConsoleLogSeverity()) {
+		WindowsEventLogLogger::WriteToWindowsEventLog(entry);
+	}
+#endif /* _WIN32 */
 }
 
 Log& Log::operator<<(const char *val)

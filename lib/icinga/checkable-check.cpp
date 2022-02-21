@@ -25,9 +25,9 @@ boost::signals2::signal<void (const Checkable::Ptr&)> Checkable::OnNextCheckUpda
 
 Atomic<uint_fast64_t> Checkable::CurrentConcurrentChecks (0);
 
-boost::mutex Checkable::m_StatsMutex;
+std::mutex Checkable::m_StatsMutex;
 int Checkable::m_PendingChecks = 0;
-boost::condition_variable Checkable::m_PendingChecksCV;
+std::condition_variable Checkable::m_PendingChecksCV;
 
 CheckCommand::Ptr Checkable::GetCheckCommand() const
 {
@@ -119,13 +119,18 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 		cr->SetExecutionEnd(now);
 
 	if (!origin || origin->IsLocal())
-		cr->SetCheckSource(IcingaApplication::GetInstance()->GetNodeName());
+		cr->SetSchedulingSource(IcingaApplication::GetInstance()->GetNodeName());
 
 	Endpoint::Ptr command_endpoint = GetCommandEndpoint();
 
-	/* override check source if command_endpoint was defined */
-	if (command_endpoint && !GetExtension("agent_check"))
-		cr->SetCheckSource(command_endpoint->GetName());
+	if (cr->GetCheckSource().IsEmpty()) {
+		if ((!origin || origin->IsLocal()))
+			cr->SetCheckSource(IcingaApplication::GetInstance()->GetNodeName());
+
+		/* override check source if command_endpoint was defined */
+		if (command_endpoint && !GetExtension("agent_check"))
+			cr->SetCheckSource(command_endpoint->GetName());
+	}
 
 	/* agent checks go through the api */
 	if (command_endpoint && GetExtension("agent_check")) {
@@ -209,11 +214,7 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 			recovery = true;
 
 		ResetNotificationNumbers();
-		SaveLastState(ServiceOK, Utility::GetTime());
-
-		/* update reachability for child objects in OK state */
-		if (!children.empty())
-			OnReachabilityChanged(this, cr, children, origin);
+		SaveLastState(ServiceOK, cr->GetExecutionEnd());
 	} else {
 		/* OK -> NOT-OK change, first SOFT state. Reset attempt counter. */
 		if (IsStateOK(old_state)) {
@@ -234,16 +235,12 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 		}
 
 		if (!IsStateOK(cr->GetState())) {
-			SaveLastState(cr->GetState(), Utility::GetTime());
+			SaveLastState(cr->GetState(), cr->GetExecutionEnd());
 		}
-
-		/* update reachability for child objects in NOT-OK state */
-		if (!children.empty())
-			OnReachabilityChanged(this, cr, children, origin);
 	}
 
 	if (!reachable)
-		SetLastStateUnreachable(Utility::GetTime());
+		SetLastStateUnreachable(cr->GetExecutionEnd());
 
 	SetCheckAttempt(attempt);
 
@@ -262,26 +259,12 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 	SetPreviousStateChange(GetLastStateChange());
 
 	if (stateChange) {
-		SetLastStateChange(now);
+		SetLastStateChange(cr->GetExecutionEnd());
 
 		/* remove acknowledgements */
 		if (GetAcknowledgement() == AcknowledgementNormal ||
 			(GetAcknowledgement() == AcknowledgementSticky && IsStateOK(new_state))) {
 			ClearAcknowledgement("");
-		}
-
-		/* reschedule direct parents */
-		for (const Checkable::Ptr& parent : GetParents()) {
-			if (parent.get() == this)
-				continue;
-
-			if (!parent->GetEnableActiveChecks())
-				continue;
-
-			if (parent->GetNextCheck() >= now + parent->GetRetryInterval()) {
-				ObjectLock olock(parent);
-				parent->SetNextCheck(now);
-			}
 		}
 	}
 
@@ -299,7 +282,7 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 
 	if (hardChange || is_volatile) {
 		SetLastHardStateRaw(new_state);
-		SetLastHardStateChange(now);
+		SetLastHardStateChange(cr->GetExecutionEnd());
 		SetLastHardStatesRaw(GetLastHardStatesRaw() / 100u + new_state * 100u);
 	}
 
@@ -307,8 +290,10 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 		SetLastSoftStatesRaw(GetLastSoftStatesRaw() / 100u + new_state * 100u);
 	}
 
+	cr->SetPreviousHardState(ServiceState(GetLastHardStatesRaw() % 100u));
+
 	if (!IsStateOK(new_state))
-		TriggerDowntimes();
+		TriggerDowntimes(cr->GetExecutionEnd());
 
 	/* statistics for external tools */
 	Checkable::UpdateStatistics(cr, checkableType);
@@ -358,15 +343,18 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 		SetLastCheckResult(cr);
 
 		if (GetProblem() != wasProblem) {
-			for (auto& service : host->GetServices()) {
+			auto services = host->GetServices();
+			olock.Unlock();
+			for (auto& service : services) {
 				Service::OnHostProblemChanged(service, cr, origin);
 			}
+			olock.Lock();
 		}
 	}
 
 	bool was_flapping = IsFlapping();
 
-	UpdateFlappingStatus(old_state != cr->GetState());
+	UpdateFlappingStatus(cr->GetState());
 
 	bool is_flapping = IsFlapping();
 
@@ -398,6 +386,36 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 		<< " threshold high: " << GetFlappingThresholdHigh()
 		<< "% current: " << GetFlappingCurrent() << "%.";
 #endif /* I2_DEBUG */
+
+	if (recovery) {
+		for (auto& child : children) {
+			if (child->GetProblem() && child->GetEnableActiveChecks()) {
+				auto nextCheck (now + Utility::Random() % 60);
+
+				ObjectLock oLock (child);
+
+				if (nextCheck < child->GetNextCheck()) {
+					child->SetNextCheck(nextCheck);
+				}
+			}
+		}
+	}
+
+	if (stateChange) {
+		/* reschedule direct parents */
+		for (const Checkable::Ptr& parent : GetParents()) {
+			if (parent.get() == this)
+				continue;
+
+			if (!parent->GetEnableActiveChecks())
+				continue;
+
+			if (parent->GetNextCheck() >= now + parent->GetRetryInterval()) {
+				ObjectLock olock(parent);
+				parent->SetNextCheck(now);
+			}
+		}
+	}
 
 	OnNewCheckResult(this, cr, origin);
 
@@ -490,6 +508,10 @@ void Checkable::ProcessCheckResult(const CheckResult::Ptr& cr, const MessageOrig
 			SetSuppressedNotifications(suppressed_types_after);
 		}
 	}
+
+	/* update reachability for child objects */
+	if ((stateChange || hardChange) && !children.empty())
+		OnReachabilityChanged(this, cr, children, origin);
 }
 
 void Checkable::ExecuteRemoteCheck(const Dictionary::Ptr& resolvedMacros)
@@ -513,6 +535,8 @@ void Checkable::ExecuteCheck()
 	/* keep track of scheduling info in case the check type doesn't provide its own information */
 	double scheduled_start = GetNextCheck();
 	double before_check = Utility::GetTime();
+
+	SetLastCheckStarted(Utility::GetTime());
 
 	/* This calls SetNextCheck() which updates the CheckerComponent's idle/pending
 	 * queues and ensures that checks are not fired multiple times. ProcessCheckResult()
@@ -640,26 +664,26 @@ void Checkable::UpdateStatistics(const CheckResult::Ptr& cr, CheckableType type)
 
 void Checkable::IncreasePendingChecks()
 {
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	m_PendingChecks++;
 }
 
 void Checkable::DecreasePendingChecks()
 {
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	m_PendingChecks--;
 	m_PendingChecksCV.notify_one();
 }
 
 int Checkable::GetPendingChecks()
 {
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	return m_PendingChecks;
 }
 
 void Checkable::AquirePendingCheckSlot(int maxPendingChecks)
 {
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	while (m_PendingChecks >= maxPendingChecks)
 		m_PendingChecksCV.wait(lock);
 

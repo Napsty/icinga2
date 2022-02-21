@@ -17,7 +17,7 @@ using namespace icinga;
 DEFINE_TYPE_INSTANCE(Object);
 
 #ifdef I2_LEAK_DEBUG
-static boost::mutex l_ObjectCountLock;
+static std::mutex l_ObjectCountLock;
 static std::map<String, int> l_ObjectCounts;
 static Timer::Ptr l_ObjectCountTimer;
 #endif /* I2_LEAK_DEBUG */
@@ -203,21 +203,21 @@ Value icinga::GetPrototypeField(const Value& context, const String& field, bool 
 #ifdef I2_LEAK_DEBUG
 void icinga::TypeAddObject(Object *object)
 {
-	boost::mutex::scoped_lock lock(l_ObjectCountLock);
+	std::unique_lock<std::mutex> lock(l_ObjectCountLock);
 	String typeName = Utility::GetTypeName(typeid(*object));
 	l_ObjectCounts[typeName]++;
 }
 
 void icinga::TypeRemoveObject(Object *object)
 {
-	boost::mutex::scoped_lock lock(l_ObjectCountLock);
+	std::unique_lock<std::mutex> lock(l_ObjectCountLock);
 	String typeName = Utility::GetTypeName(typeid(*object));
 	l_ObjectCounts[typeName]--;
 }
 
 static void TypeInfoTimerHandler()
 {
-	boost::mutex::scoped_lock lock(l_ObjectCountLock);
+	std::unique_lock<std::mutex> lock(l_ObjectCountLock);
 
 	typedef std::map<String, int>::value_type kv_pair;
 	for (kv_pair& kv : l_ObjectCounts) {
@@ -234,7 +234,7 @@ static void TypeInfoTimerHandler()
 INITIALIZE_ONCE([]() {
 	l_ObjectCountTimer = new Timer();
 	l_ObjectCountTimer->SetInterval(10);
-	l_ObjectCountTimer->OnTimerExpired.connect(std::bind(TypeInfoTimerHandler));
+	l_ObjectCountTimer->OnTimerExpired.connect([](const Timer * const&) { TypeInfoTimerHandler(); });
 	l_ObjectCountTimer->Start();
 });
 #endif /* I2_LEAK_DEBUG */

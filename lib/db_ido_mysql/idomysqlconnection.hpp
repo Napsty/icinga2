@@ -9,6 +9,7 @@
 #include "base/timer.hpp"
 #include "base/workqueue.hpp"
 #include "base/library.hpp"
+#include <cstdint>
 
 namespace icinga
 {
@@ -36,6 +37,9 @@ public:
 
 	static void StatsFunc(const Dictionary::Ptr& status, const Array::Ptr& perfdata);
 
+	const char * GetLatestSchemaVersion() const noexcept override;
+	const char * GetCompatSchemaVersion() const noexcept override;
+
 	int GetPendingQueryCount() const override;
 
 protected:
@@ -50,11 +54,10 @@ protected:
 	void CleanUpExecuteQuery(const String& table, const String& time_key, double time_value) override;
 	void FillIDCache(const DbType::Ptr& type) override;
 	void NewTransaction() override;
+	void Disconnect() override;
 
 private:
 	DbReference m_InstanceID;
-
-	WorkQueue m_QueryQueue{10000000};
 
 	Library m_Library;
 	std::unique_ptr<MysqlInterface, MysqlInterfaceDeleter> m_Mysql;
@@ -64,6 +67,7 @@ private:
 	unsigned int m_MaxPacketSize;
 
 	std::vector<IdoAsyncQuery> m_AsyncQueries;
+	uint_fast32_t m_UncommittedAsyncQueries = 0;
 
 	Timer::Ptr m_ReconnectTimer;
 	Timer::Ptr m_TxTimer;
@@ -82,12 +86,10 @@ private:
 	void InternalActivateObject(const DbObject::Ptr& dbobj);
 	void InternalDeactivateObject(const DbObject::Ptr& dbobj);
 
-	void Disconnect();
 	void Reconnect();
 
 	void AssertOnWorkQueue();
 
-	void TxTimerHandler();
 	void ReconnectTimerHandler();
 
 	bool CanExecuteQuery(const DbQuery& query);

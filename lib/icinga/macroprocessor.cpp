@@ -15,6 +15,8 @@
 
 using namespace icinga;
 
+thread_local Dictionary::Ptr MacroResolver::OverrideMacros;
+
 Value MacroProcessor::ResolveMacros(const Value& str, const ResolverList& resolvers,
 	const CheckResult::Ptr& cr, String *missingMacro,
 	const MacroProcessor::EscapeCallback& escapeFn, const Dictionary::Ptr& resolvedMacros,
@@ -510,8 +512,6 @@ Value MacroProcessor::ResolveArguments(const Value& command, const Dictionary::P
 
 				continue;
 			}
-
-			arg.SkipValue = arg.SkipValue || arg.AValue.GetType() == ValueEmpty;
 
 			args.emplace_back(std::move(arg));
 		}

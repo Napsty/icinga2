@@ -26,8 +26,14 @@ public:
 	static void NextCheckChangedHandler(const Checkable::Ptr& checkable, const MessageOrigin::Ptr& origin);
 	static Value NextCheckChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
 
+	static void LastCheckStartedChangedHandler(const Checkable::Ptr& checkable, const MessageOrigin::Ptr& origin);
+	static Value LastCheckStartedChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
+
 	static void SuppressedNotificationsChangedHandler(const Checkable::Ptr& checkable, const MessageOrigin::Ptr& origin);
 	static Value SuppressedNotificationsChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
+
+	static void SuppressedNotificationTypesChangedHandler(const Notification::Ptr& notification, const MessageOrigin::Ptr& origin);
+	static Value SuppressedNotificationTypesChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
 
 	static void NextNotificationChangedHandler(const Notification::Ptr& notification, const MessageOrigin::Ptr& origin);
 	static Value NextNotificationChangedAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
@@ -60,12 +66,17 @@ public:
 	static void NotificationSentToAllUsersHandler(const Notification::Ptr& notification, const Checkable::Ptr& checkable, const std::set<User::Ptr>& users,
 		NotificationType notificationType, const CheckResult::Ptr& cr, const String& author, const String& commentText, const MessageOrigin::Ptr& origin);
 	static Value NotificationSentToAllUsersAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
+	static Value ExecutedCommandAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
+	static Value UpdateExecutionsAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
+
+	static void SetRemovalInfoHandler(const ConfigObject::Ptr& obj, const String& removedBy, double removeTime, const MessageOrigin::Ptr& origin);
+	static Value SetRemovalInfoAPIHandler(const MessageOrigin::Ptr& origin, const Dictionary::Ptr& params);
 
 	static int GetCheckRequestQueueSize();
 	static void LogRemoteCheckQueueInformation();
 
 private:
-	static boost::mutex m_Mutex;
+	static std::mutex m_Mutex;
 	static std::deque<std::function<void ()>> m_CheckRequestQueue;
 	static bool m_CheckSchedulerRunning;
 	static int m_ChecksExecutedDuringInterval;

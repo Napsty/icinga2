@@ -36,8 +36,8 @@ class Notification : CustomVarObject < NotificationNameComposer
 			return TimePeriod::GetByName(GetPeriodRaw());
 		}}}
 	};
-	[config, protected] array(name(User)) users (UsersRaw);
-	[config, protected] array(name(UserGroup)) user_groups (UserGroupsRaw);
+	[config, signal_with_old_value] array(name(User)) users (UsersRaw);
+	[config, signal_with_old_value] array(name(UserGroup)) user_groups (UserGroupsRaw);
 	[config] Dictionary::Ptr times;
 	[config] array(Value) types;
 	[no_user_view, no_user_modify] int type_filter_real (TypeFilter);
@@ -85,6 +85,10 @@ class Notification : CustomVarObject < NotificationNameComposer
 	[state] Timestamp next_notification;
 	[state] int notification_number;
 	[state] Timestamp last_problem_notification;
+
+	[state, no_user_view, no_user_modify] int suppressed_notifications {
+		default {{{ return 0; }}}
+	};
 
 	[config, navigation] name(Endpoint) command_endpoint (CommandEndpointRaw) {
 		navigate {{{

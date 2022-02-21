@@ -14,6 +14,7 @@
 #include "base/exception.hpp"
 #include "base/convert.hpp"
 #include "base/statsfunction.hpp"
+#include <chrono>
 
 using namespace icinga;
 
@@ -44,10 +45,16 @@ void CheckerComponent::StatsFunc(const Dictionary::Ptr& status, const Array::Ptr
 
 void CheckerComponent::OnConfigLoaded()
 {
-	ConfigObject::OnActiveChanged.connect(std::bind(&CheckerComponent::ObjectHandler, this, _1));
-	ConfigObject::OnPausedChanged.connect(std::bind(&CheckerComponent::ObjectHandler, this, _1));
+	ConfigObject::OnActiveChanged.connect([this](const ConfigObject::Ptr& object, const Value&) {
+		ObjectHandler(object);
+	});
+	ConfigObject::OnPausedChanged.connect([this](const ConfigObject::Ptr& object, const Value&) {
+		ObjectHandler(object);
+	});
 
-	Checkable::OnNextCheckChanged.connect(std::bind(&CheckerComponent::NextCheckChangedHandler, this, _1));
+	Checkable::OnNextCheckChanged.connect([this](const Checkable::Ptr& checkable, const Value&) {
+		NextCheckChangedHandler(checkable);
+	});
 }
 
 void CheckerComponent::Start(bool runtimeCreated)
@@ -58,44 +65,20 @@ void CheckerComponent::Start(bool runtimeCreated)
 		<< "'" << GetName() << "' started.";
 
 
-	m_Thread = std::thread(std::bind(&CheckerComponent::CheckThreadProc, this));
+	m_Thread = std::thread([this]() { CheckThreadProc(); });
 
 	m_ResultTimer = new Timer();
 	m_ResultTimer->SetInterval(5);
-	m_ResultTimer->OnTimerExpired.connect(std::bind(&CheckerComponent::ResultTimerHandler, this));
+	m_ResultTimer->OnTimerExpired.connect([this](const Timer * const&) { ResultTimerHandler(); });
 	m_ResultTimer->Start();
 }
 
 void CheckerComponent::Stop(bool runtimeRemoved)
 {
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 		m_Stopped = true;
 		m_CV.notify_all();
-	}
-
-	double wait = 0.0;
-
-	while (Checkable::GetPendingChecks() > 0) {
-		Log(LogDebug, "CheckerComponent")
-			<< "Waiting for running checks (" << Checkable::GetPendingChecks()
-			<< ") to finish. Waited for " << wait << " seconds now.";
-
-		Utility::Sleep(0.1);
-		wait += 0.1;
-
-		/* Pick a timeout slightly shorther than the process reload timeout. */
-		double reloadTimeout = Application::GetReloadTimeout();
-		double waitMax = reloadTimeout - 30;
-		if (waitMax <= 0)
-			waitMax = 1;
-
-		if (wait > waitMax) {
-			Log(LogWarning, "CheckerComponent")
-				<< "Checks running too long for " << wait
-				<< " seconds, hard shutdown before reload timeout: " << reloadTimeout << ".";
-			break;
-		}
 	}
 
 	m_ResultTimer->Stop();
@@ -112,7 +95,7 @@ void CheckerComponent::CheckThreadProc()
 	Utility::SetThreadName("Check Scheduler");
 	IcingaApplication::Ptr icingaApp = IcingaApplication::GetInstance();
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	for (;;) {
 		typedef boost::multi_index::nth_index<CheckableSet, 1>::type CheckTimeView;
@@ -140,7 +123,7 @@ void CheckerComponent::CheckThreadProc()
 
 		if (wait > 0) {
 			/* Wait for the next check. */
-			m_CV.timed_wait(lock, boost::posix_time::milliseconds(long(wait * 1000)));
+			m_CV.wait_for(lock, std::chrono::duration<double>(wait));
 
 			continue;
 		}
@@ -222,7 +205,13 @@ void CheckerComponent::CheckThreadProc()
 
 		Checkable::IncreasePendingChecks();
 
-		Utility::QueueAsyncCallback(std::bind(&CheckerComponent::ExecuteCheckHelper, CheckerComponent::Ptr(this), checkable));
+		/*
+		 * Explicitly use CheckerComponent::Ptr to keep the reference counted while the
+		 * callback is active and making it crash safe
+		 */
+		CheckerComponent::Ptr checkComponent(this);
+
+		Utility::QueueAsyncCallback([this, checkComponent, checkable]() { ExecuteCheckHelper(checkable); });
 
 		lock.lock();
 	}
@@ -253,7 +242,7 @@ void CheckerComponent::ExecuteCheckHelper(const Checkable::Ptr& checkable)
 	Checkable::DecreasePendingChecks();
 
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 
 		/* remove the object from the list of pending objects; if it's not in the
 		 * list this was a manual (i.e. forced) check and we must not re-add the
@@ -279,7 +268,7 @@ void CheckerComponent::ResultTimerHandler()
 	std::ostringstream msgbuf;
 
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 
 		msgbuf << "Pending checkables: " << m_PendingCheckables.size() << "; Idle checkables: " << m_IdleCheckables.size() << "; Checks/s: "
 			<< (CIB::GetActiveHostChecksStatistics(60) + CIB::GetActiveServiceChecksStatistics(60)) / 60.0;
@@ -299,7 +288,7 @@ void CheckerComponent::ObjectHandler(const ConfigObject::Ptr& object)
 	bool same_zone = (!zone || Zone::GetLocalZone() == zone);
 
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 
 		if (object->IsActive() && !object->IsPaused() && same_zone) {
 			if (m_PendingCheckables.find(checkable) != m_PendingCheckables.end())
@@ -325,7 +314,7 @@ CheckableScheduleInfo CheckerComponent::GetCheckableScheduleInfo(const Checkable
 
 void CheckerComponent::NextCheckChangedHandler(const Checkable::Ptr& checkable)
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	/* remove and re-insert the object from the set in order to force an index update */
 	typedef boost::multi_index::nth_index<CheckableSet, 0>::type CheckableView;
@@ -346,14 +335,14 @@ void CheckerComponent::NextCheckChangedHandler(const Checkable::Ptr& checkable)
 
 unsigned long CheckerComponent::GetIdleCheckables()
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	return m_IdleCheckables.size();
 }
 
 unsigned long CheckerComponent::GetPendingCheckables()
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	return m_PendingCheckables.size();
 }

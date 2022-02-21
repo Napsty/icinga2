@@ -1,6 +1,7 @@
 /* Icinga 2 | (c) 2012 Icinga GmbH | GPLv2+ */
 
 #include "base/dictionary.hpp"
+#include "base/function.hpp"
 #include "base/namespace.hpp"
 #include "base/array.hpp"
 #include "base/objectlock.hpp"
@@ -18,6 +19,7 @@ BOOST_AUTO_TEST_CASE(encode)
 		{ "array", new Array({ new Namespace() }) },
 		{ "false", false },
 		{ "float", -1.25 },
+		{ "fx", new Function("<test>", []() {}) },
 		{ "int", -42 },
 		{ "null", Value() },
 		{ "string", "LF\nTAB\tAUml\xC3\xA4Ill\xC3" },
@@ -31,16 +33,19 @@ BOOST_AUTO_TEST_CASE(encode)
     ],
     "false": false,
     "float": -1.25,
-    "int": -42.0,
+    "fx": "Object of type 'Function'",
+    "int": -42,
     "null": null,
     "string": "LF\nTAB\tAUml\u00e4Ill\ufffd",
     "true": true,
-    "uint": 23.0
-})EOF");
+    "uint": 23
+}
+)EOF");
 
 	BOOST_CHECK(JsonEncode(input, true) == output);
 
 	boost::algorithm::replace_all(output, " ", "");
+	boost::algorithm::replace_all(output, "Objectoftype'Function'", "Object of type 'Function'");
 	boost::algorithm::replace_all(output, "\n", "");
 
 	BOOST_CHECK(JsonEncode(input, false) == output);
@@ -54,12 +59,13 @@ BOOST_AUTO_TEST_CASE(decode)
     ],
     "false": false,
     "float": -1.25,
-    "int": -42.0,
+    "int": -42,
     "null": null,
     "string": "LF\nTAB\tAUmlIll",
     "true": true,
-    "uint": 23.0
-})EOF");
+    "uint": 23
+}
+)EOF");
 
 	boost::algorithm::replace_all(input, "AUml", "AUml\xC3\xA4");
 	boost::algorithm::replace_all(input, "Ill", "Ill\xC3");

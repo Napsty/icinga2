@@ -10,10 +10,7 @@
 #include "base/timer.hpp"
 #include "base/ringbuffer.hpp"
 #include <boost/thread/once.hpp>
-#include <boost/thread/mutex.hpp>
-
-#define IDO_CURRENT_SCHEMA_VERSION "1.14.3"
-#define IDO_COMPAT_SCHEMA_VERSION "1.14.3"
+#include <mutex>
 
 namespace icinga
 {
@@ -29,6 +26,9 @@ public:
 	DECLARE_OBJECT(DbConnection);
 
 	static void InitializeDbTimer();
+
+	virtual const char * GetLatestSchemaVersion() const noexcept = 0;
+	virtual const char * GetCompatSchemaVersion() const noexcept = 0;
 
 	void SetConfigHash(const DbObject::Ptr& dbobj, const String& hash);
 	void SetConfigHash(const DbType::Ptr& type, const DbReference& objid, const String& hash);
@@ -75,6 +75,7 @@ protected:
 	virtual void CleanUpExecuteQuery(const String& table, const String& time_column, double max_age);
 	virtual void FillIDCache(const DbType::Ptr& type) = 0;
 	virtual void NewTransaction() = 0;
+	virtual void Disconnect() = 0;
 
 	void UpdateObject(const ConfigObject::Ptr& object);
 	void UpdateAllObjects();
@@ -92,6 +93,11 @@ protected:
 
 	static int GetSessionToken();
 
+	void IncreasePendingQueries(int count);
+	void DecreasePendingQueries(int count);
+
+	WorkQueue m_QueryQueue{10000000, 1, LogNotice};
+
 private:
 	bool m_IDCacheValid{false};
 	std::map<std::pair<DbType::Ptr, DbReference>, String> m_ConfigHashes;
@@ -101,17 +107,25 @@ private:
 	std::set<DbObject::Ptr> m_ConfigUpdates;
 	std::set<DbObject::Ptr> m_StatusUpdates;
 	Timer::Ptr m_CleanUpTimer;
+	Timer::Ptr m_LogStatsTimer;
+
+	double m_LogStatsTimeout;
 
 	void CleanUpHandler();
+	void LogStatsHandler();
 
 	static Timer::Ptr m_ProgramStatusTimer;
 	static boost::once_flag m_OnceFlag;
 
 	static void InsertRuntimeVariable(const String& key, const Value& value);
 
-	mutable boost::mutex m_StatsMutex;
+	mutable std::mutex m_StatsMutex;
 	RingBuffer m_QueryStats{15 * 60};
 	bool m_ActiveChangedHandler{false};
+
+	RingBuffer m_InputQueries{10};
+	RingBuffer m_OutputQueries{10};
+	Atomic<uint_fast64_t> m_PendingQueries{0};
 };
 
 struct database_error : virtual std::exception, virtual boost::exception { };

@@ -12,21 +12,21 @@ class TimePeriod : CustomVarObject
 {
 	[config] String display_name {
 		get {{{
-			if (m_DisplayName.IsEmpty())
+			if (m_DisplayName.m_Value.IsEmpty())
 				return GetName();
 			else
-				return m_DisplayName;
+				return m_DisplayName.m_Value;
 		}}}
 	};
-	[config] Dictionary::Ptr ranges;
+	[config, signal_with_old_value] Dictionary::Ptr ranges;
 	[config, required] Function::Ptr update;
 	[config] bool prefer_includes {
 		default {{{ return true; }}}
 	};
-	[config, required] array(name(TimePeriod)) excludes {
+	[config, required, signal_with_old_value] array(name(TimePeriod)) excludes {
 		default {{{ return new Array(); }}}
 	};
-	[config, required] array(name(TimePeriod)) includes {
+	[config, required, signal_with_old_value] array(name(TimePeriod)) includes {
 		default {{{ return new Array(); }}}
 	};
 	[state, no_user_modify] Value valid_begin;

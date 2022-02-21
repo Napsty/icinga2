@@ -6,13 +6,17 @@
 #include "icinga/downtime.hpp"
 #include "icinga/service.hpp"
 #include "base/timer.hpp"
+#include "base/tlsutility.hpp"
 #include "base/configtype.hpp"
 #include "base/utility.hpp"
 #include "base/objectlock.hpp"
+#include "base/object-packer.hpp"
+#include "base/serializer.hpp"
 #include "base/convert.hpp"
 #include "base/logger.hpp"
 #include "base/exception.hpp"
 #include <boost/thread/once.hpp>
+#include <set>
 
 using namespace icinga;
 
@@ -76,19 +80,35 @@ void ScheduledDowntime::Start(bool runtimeCreated)
 	boost::call_once(once, [this]() {
 		l_Timer = new Timer();
 		l_Timer->SetInterval(60);
-		l_Timer->OnTimerExpired.connect(std::bind(&ScheduledDowntime::TimerProc));
+		l_Timer->OnTimerExpired.connect([](const Timer * const&) { TimerProc(); });
 		l_Timer->Start();
 	});
 
 	if (!IsPaused())
-		Utility::QueueAsyncCallback(std::bind(&ScheduledDowntime::CreateNextDowntime, this));
+		Utility::QueueAsyncCallback([this]() { CreateNextDowntime(); });
 }
 
 void ScheduledDowntime::TimerProc()
 {
 	for (const ScheduledDowntime::Ptr& sd : ConfigType::GetObjectsByType<ScheduledDowntime>()) {
-		if (sd->IsActive() && !sd->IsPaused())
-			sd->CreateNextDowntime();
+		if (sd->IsActive() && !sd->IsPaused()) {
+			try {
+				sd->CreateNextDowntime();
+			} catch (const std::exception& ex) {
+				Log(LogCritical, "ScheduledDowntime")
+					<< "Exception occurred during creation of next downtime for scheduled downtime '"
+					<< sd->GetName() << "': " << DiagnosticInformation(ex, false);
+				continue;
+			}
+
+			try {
+				sd->RemoveObsoleteDowntimes();
+			} catch (const std::exception& ex) {
+				Log(LogCritical, "ScheduledDowntime")
+					<< "Exception occurred during removal of obsolete downtime for scheduled downtime '"
+					<< sd->GetName() << "': " << DiagnosticInformation(ex, false);
+			}
+		}
 	}
 }
 
@@ -229,14 +249,21 @@ void ScheduledDowntime::CreateNextDowntime()
 	}
 
 	double minEnd = 0;
+	auto downtimeOptionsHash (HashDowntimeOptions());
 
 	for (const Downtime::Ptr& downtime : GetCheckable()->GetDowntimes()) {
+		if (downtime->GetScheduledBy() != GetName())
+			continue;
+
+		auto configOwnerHash (downtime->GetConfigOwnerHash());
+		if (!configOwnerHash.IsEmpty() && configOwnerHash != downtimeOptionsHash)
+			continue;
+
 		double end = downtime->GetEndTime();
 		if (end > minEnd)
 			minEnd = end;
 
-		if (downtime->GetScheduledBy() != GetName() ||
-			downtime->GetStartTime() < Utility::GetTime())
+		if (downtime->GetStartTime() < Utility::GetTime())
 			continue;
 
 		/* We've found a downtime that is owned by us and that hasn't started yet - we're done. */
@@ -253,11 +280,10 @@ void ScheduledDowntime::CreateNextDowntime()
 			return;
 	}
 
-	String downtimeName = Downtime::AddDowntime(GetCheckable(), GetAuthor(), GetComment(),
+	Downtime::Ptr downtime = Downtime::AddDowntime(GetCheckable(), GetAuthor(), GetComment(),
 		segment.first, segment.second,
 		GetFixed(), String(), GetDuration(), GetName(), GetName());
-
-	Downtime::Ptr downtime = Downtime::GetByName(downtimeName);
+	String downtimeName = downtime->GetName();
 
 	int childOptions = Downtime::ChildOptionsFromValue(GetChildOptions());
 	if (childOptions > 0) {
@@ -275,11 +301,29 @@ void ScheduledDowntime::CreateNextDowntime()
 			Log(LogNotice, "ScheduledDowntime")
 				<< "Scheduling downtime for child object " << child->GetName();
 
-			String childDowntimeName = Downtime::AddDowntime(child, GetAuthor(), GetComment(),
+			Downtime::Ptr childDowntime = Downtime::AddDowntime(child, GetAuthor(), GetComment(),
 				segment.first, segment.second, GetFixed(), triggerName, GetDuration(), GetName(), GetName());
 
 			Log(LogNotice, "ScheduledDowntime")
-				<< "Add child downtime '" << childDowntimeName << "'.";
+				<< "Add child downtime '" << childDowntime->GetName() << "'.";
+		}
+	}
+}
+
+void ScheduledDowntime::RemoveObsoleteDowntimes()
+{
+	auto name (GetName());
+	auto downtimeOptionsHash (HashDowntimeOptions());
+
+	// Just to be sure start and removal don't happen at the same time
+	auto threshold (Utility::GetTime() + 5 * 60);
+
+	for (const Downtime::Ptr& downtime : GetCheckable()->GetDowntimes()) {
+		if (downtime->GetScheduledBy() == name && downtime->GetStartTime() > threshold) {
+			auto configOwnerHash (downtime->GetConfigOwnerHash());
+
+			if (!configOwnerHash.IsEmpty() && configOwnerHash != downtimeOptionsHash)
+				Downtime::RemoveDowntime(downtime->GetName(), false, true);
 		}
 	}
 }
@@ -323,6 +367,22 @@ void ScheduledDowntime::ValidateChildOptions(const Lazy<Value>& lvalue, const Va
 	} catch (const std::exception&) {
 		BOOST_THROW_EXCEPTION(ValidationError(this, { "child_options" }, "Invalid child_options specified"));
 	}
+}
+
+static const std::set<String> l_SDDowntimeOptions ({
+	"author", "child_options", "comment", "duration", "fixed", "ranges", "vars"
+});
+
+String ScheduledDowntime::HashDowntimeOptions()
+{
+	Dictionary::Ptr allOpts = Serialize(this, FAConfig);
+	Dictionary::Ptr opts = new Dictionary();
+
+	for (auto& opt : l_SDDowntimeOptions) {
+		opts->Set(opt, allOpts->Get(opt));
+	}
+
+	return SHA256(PackObject(opts));
 }
 
 bool ScheduledDowntime::AllConfigIsLoaded()

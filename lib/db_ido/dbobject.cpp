@@ -25,6 +25,7 @@ using namespace icinga;
 
 boost::signals2::signal<void (const DbQuery&)> DbObject::OnQuery;
 boost::signals2::signal<void (const std::vector<DbQuery>&)> DbObject::OnMultipleQueries;
+boost::signals2::signal<void (const std::function<void (const DbObject::QueryCallbacks&)>&)> DbObject::OnMakeQueries;
 
 INITIALIZE_ONCE(&DbObject::StaticInitialize);
 
@@ -35,11 +36,11 @@ DbObject::DbObject(intrusive_ptr<DbType> type, String name1, String name2)
 void DbObject::StaticInitialize()
 {
 	/* triggered in ProcessCheckResult(), requires UpdateNextCheck() to be called before */
-	ConfigObject::OnStateChanged.connect(std::bind(&DbObject::StateChangedHandler, _1));
-	CustomVarObject::OnVarsChanged.connect(std::bind(&DbObject::VarsChangedHandler, _1));
+	ConfigObject::OnStateChanged.connect([](const ConfigObject::Ptr& object) { StateChangedHandler(object); });
+	CustomVarObject::OnVarsChanged.connect([](const CustomVarObject::Ptr& customVar, const Value&) { VarsChangedHandler(customVar); });
 
 	/* triggered on create, update and delete objects */
-	ConfigObject::OnVersionChanged.connect(std::bind(&DbObject::VersionChangedHandler, _1));
+	ConfigObject::OnVersionChanged.connect([](const ConfigObject::Ptr& object, const Value&) { VersionChangedHandler(object); });
 }
 
 void DbObject::SetObject(const ConfigObject::Ptr& object)
@@ -111,7 +112,6 @@ void DbObject::SendConfigUpdateHeavy(const Dictionary::Ptr& configFields)
 {
 	/* update custom var config and status */
 	SendVarsConfigUpdateHeavy();
-	SendVarsStatusUpdate();
 
 	/* config attributes */
 	if (!configFields)
@@ -245,6 +245,22 @@ void DbObject::SendVarsConfigUpdateHeavy()
 				{ "instance_id", 0 } /* DbConnection class fills in real ID */
 			});
 			queries.emplace_back(std::move(query3));
+
+			DbQuery query4;
+			query4.Table = "customvariablestatus";
+			query4.Type = DbQueryInsert;
+			query4.Category = DbCatState;
+
+			query4.Fields = new Dictionary({
+				{ "varname", kv.first },
+				{ "varvalue", value },
+				{ "is_json", is_json },
+				{ "status_update_time", DbValue::FromTimestamp(Utility::GetTime()) },
+				{ "object_id", obj },
+				{ "instance_id", 0 } /* DbConnection class fills in real ID */
+			});
+
+			queries.emplace_back(std::move(query4));
 		}
 	}
 
@@ -332,7 +348,7 @@ void DbObject::OnStatusUpdate()
 
 DbObject::Ptr DbObject::GetOrCreateByObject(const ConfigObject::Ptr& object)
 {
-	boost::mutex::scoped_lock lock(GetStaticMutex());
+	std::unique_lock<std::mutex> lock(GetStaticMutex());
 
 	DbObject::Ptr dbobj = object->GetExtension("DbObject");
 
@@ -407,8 +423,8 @@ void DbObject::VersionChangedHandler(const ConfigObject::Ptr& object)
 	}
 }
 
-boost::mutex& DbObject::GetStaticMutex()
+std::mutex& DbObject::GetStaticMutex()
 {
-	static boost::mutex mutex;
+	static std::mutex mutex;
 	return mutex;
 }

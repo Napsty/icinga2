@@ -60,18 +60,18 @@ void StatusDataWriter::Start(bool runtimeCreated)
 		<< "'" << GetName() << "' started.";
 
 	Log(LogWarning, "StatusDataWriter")
-		<< "This feature is DEPRECATED and will be removed in future releases. Check the roadmap at https://github.com/Icinga/icinga2/milestones";
+		<< "This feature is DEPRECATED and may be removed in future releases. Check the roadmap at https://github.com/Icinga/icinga2/milestones";
 
 	m_ObjectsCacheOutdated = true;
 
 	m_StatusTimer = new Timer();
 	m_StatusTimer->SetInterval(GetUpdateInterval());
-	m_StatusTimer->OnTimerExpired.connect(std::bind(&StatusDataWriter::StatusTimerHandler, this));
+	m_StatusTimer->OnTimerExpired.connect([this](const Timer * const&){ StatusTimerHandler(); });
 	m_StatusTimer->Start();
 	m_StatusTimer->Reschedule(0);
 
-	ConfigObject::OnVersionChanged.connect(std::bind(&StatusDataWriter::ObjectHandler, this));
-	ConfigObject::OnActiveChanged.connect(std::bind(&StatusDataWriter::ObjectHandler, this));
+	ConfigObject::OnVersionChanged.connect([this](const ConfigObject::Ptr&, const Value&) { ObjectHandler(); });
+	ConfigObject::OnActiveChanged.connect([this](const ConfigObject::Ptr&, const Value&) { ObjectHandler(); });
 }
 
 /**

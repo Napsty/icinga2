@@ -53,6 +53,7 @@ class CheckResult
 	[state] int exit_status;
 
 	[state, enum] ServiceState "state";
+	[state, enum] ServiceState previous_hard_state;
 	[state] String output;
 	[state] Array::Ptr performance_data;
 
@@ -61,6 +62,7 @@ class CheckResult
 	};
 
 	[state] String check_source;
+	[state] String scheduling_source;
 	[state] double ttl;
 
 	[state] Dictionary::Ptr vars_before;

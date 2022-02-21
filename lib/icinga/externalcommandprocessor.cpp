@@ -1,6 +1,7 @@
 /* Icinga 2 | (c) 2012 Icinga GmbH | GPLv2+ */
 
 #include "icinga/externalcommandprocessor.hpp"
+#include "icinga/checkable.hpp"
 #include "icinga/host.hpp"
 #include "icinga/service.hpp"
 #include "icinga/user.hpp"
@@ -67,7 +68,7 @@ void ExternalCommandProcessor::Execute(double time, const String& command, const
 	});
 
 	{
-		boost::mutex::scoped_lock lock(GetMutex());
+		std::unique_lock<std::mutex> lock(GetMutex());
 
 		auto it = GetCommands().find(command);
 
@@ -106,7 +107,7 @@ void ExternalCommandProcessor::Execute(double time, const String& command, const
 
 void ExternalCommandProcessor::RegisterCommand(const String& command, const ExternalCommandCallback& callback, size_t minArgs, size_t maxArgs)
 {
-	boost::mutex::scoped_lock lock(GetMutex());
+	std::unique_lock<std::mutex> lock(GetMutex());
 	ExternalCommandInfo eci;
 	eci.Callback = callback;
 	eci.MinArgs = minArgs;
@@ -283,6 +284,12 @@ void ExternalCommandProcessor::ProcessHostCheckResult(double time, const std::ve
 	if (!host->GetEnablePassiveChecks())
 		BOOST_THROW_EXCEPTION(std::invalid_argument("Got passive check result for host '" + arguments[0] + "' which has passive checks disabled."));
 
+	if (!host->IsReachable(DependencyCheckExecution)) {
+		Log(LogNotice, "ExternalCommandProcessor")
+			<< "Ignoring passive check result for unreachable host '" << arguments[0] << "'";
+		return;
+	}
+
 	int exitStatus = Convert::ToDouble(arguments[1]);
 	CheckResult::Ptr result = new CheckResult();
 	std::pair<String, String> co = PluginUtility::ParseCheckOutput(arguments[2]);
@@ -323,6 +330,12 @@ void ExternalCommandProcessor::ProcessServiceCheckResult(double time, const std:
 
 	if (!service->GetEnablePassiveChecks())
 		BOOST_THROW_EXCEPTION(std::invalid_argument("Got passive check result for service '" + arguments[1] + "' which has passive checks disabled."));
+
+	if (!service->IsReachable(DependencyCheckExecution)) {
+		Log(LogNotice, "ExternalCommandProcessor")
+			<< "Ignoring passive check result for unreachable service '" << arguments[1] << "'";
+		return;
+	}
 
 	int exitStatus = Convert::ToDouble(arguments[2]);
 	CheckResult::Ptr result = new CheckResult();
@@ -970,10 +983,16 @@ void ExternalCommandProcessor::ScheduleSvcDowntime(double, const std::vector<Str
 void ExternalCommandProcessor::DelSvcDowntime(double, const std::vector<String>& arguments)
 {
 	int id = Convert::ToLong(arguments[0]);
-	Log(LogNotice, "ExternalCommandProcessor")
-		<< "Removing downtime ID " << arguments[0];
 	String rid = Downtime::GetDowntimeIDFromLegacyID(id);
-	Downtime::RemoveDowntime(rid, true);
+
+	try {
+		Downtime::RemoveDowntime(rid, false, true);
+
+		Log(LogNotice, "ExternalCommandProcessor")
+			<< "Removed downtime ID " << arguments[0];
+	} catch (const invalid_downtime_removal_error& error) {
+		Log(LogWarning, "ExternalCommandProcessor") << error.what();
+	}
 }
 
 void ExternalCommandProcessor::ScheduleHostDowntime(double, const std::vector<String>& arguments)
@@ -1049,7 +1068,7 @@ void ExternalCommandProcessor::ScheduleAndPropagateTriggeredHostDowntime(double,
 	Log(LogNotice, "ExternalCommandProcessor")
 		<< "Creating downtime for host " << host->GetName();
 
-	String parentDowntime = Downtime::AddDowntime(host, arguments[6], arguments[7],
+	Downtime::Ptr parentDowntime = Downtime::AddDowntime(host, arguments[6], arguments[7],
 		Convert::ToDouble(arguments[1]), Convert::ToDouble(arguments[2]),
 		Convert::ToBool(is_fixed), triggeredBy, Convert::ToDouble(arguments[5]));
 
@@ -1065,17 +1084,23 @@ void ExternalCommandProcessor::ScheduleAndPropagateTriggeredHostDowntime(double,
 
 		(void) Downtime::AddDowntime(child, arguments[6], arguments[7],
 			Convert::ToDouble(arguments[1]), Convert::ToDouble(arguments[2]),
-			Convert::ToBool(is_fixed), parentDowntime, Convert::ToDouble(arguments[5]));
+			Convert::ToBool(is_fixed), parentDowntime->GetName(), Convert::ToDouble(arguments[5]));
 	}
 }
 
 void ExternalCommandProcessor::DelHostDowntime(double, const std::vector<String>& arguments)
 {
 	int id = Convert::ToLong(arguments[0]);
-	Log(LogNotice, "ExternalCommandProcessor")
-		<< "Removing downtime ID " << arguments[0];
 	String rid = Downtime::GetDowntimeIDFromLegacyID(id);
-	Downtime::RemoveDowntime(rid, true);
+
+	try {
+		Downtime::RemoveDowntime(rid, false, true);
+
+		Log(LogNotice, "ExternalCommandProcessor")
+			<< "Removed downtime ID " << arguments[0];
+	} catch (const invalid_downtime_removal_error& error) {
+		Log(LogWarning, "ExternalCommandProcessor") << error.what();
+	}
 }
 
 void ExternalCommandProcessor::DelDowntimeByHostName(double, const std::vector<String>& arguments)
@@ -1102,10 +1127,15 @@ void ExternalCommandProcessor::DelDowntimeByHostName(double, const std::vector<S
 			<< ("Ignoring additional parameters for host '" + arguments[0] + "' downtime deletion.");
 
 	for (const Downtime::Ptr& downtime : host->GetDowntimes()) {
-		Log(LogNotice, "ExternalCommandProcessor")
-			<< "Removing downtime '" << downtime->GetName() << "'.";
+		try {
+			String downtimeName = downtime->GetName();
+			Downtime::RemoveDowntime(downtimeName, false, true);
 
-		Downtime::RemoveDowntime(downtime->GetName(), true);
+			Log(LogNotice, "ExternalCommandProcessor")
+				<< "Removed downtime '" << downtimeName << "'.";
+		} catch (const invalid_downtime_removal_error& error) {
+			Log(LogWarning, "ExternalCommandProcessor") << error.what();
+		}
 	}
 
 	for (const Service::Ptr& service : host->GetServices()) {
@@ -1119,10 +1149,15 @@ void ExternalCommandProcessor::DelDowntimeByHostName(double, const std::vector<S
 			if (!commentString.IsEmpty() && downtime->GetComment() != commentString)
 				continue;
 
-			Log(LogNotice, "ExternalCommandProcessor")
-				<< "Removing downtime '" << downtime->GetName() << "'.";
+			try {
+				String downtimeName = downtime->GetName();
+				Downtime::RemoveDowntime(downtimeName, false, true);
 
-			Downtime::RemoveDowntime(downtime->GetName(), true);
+				Log(LogNotice, "ExternalCommandProcessor")
+					<< "Removed downtime '" << downtimeName << "'.";
+			} catch (const invalid_downtime_removal_error& error) {
+				Log(LogWarning, "ExternalCommandProcessor") << error.what();
+			}
 		}
 	}
 }
@@ -2232,9 +2267,9 @@ void ExternalCommandProcessor::DisableServicegroupSvcNotifications(double, const
 	}
 }
 
-boost::mutex& ExternalCommandProcessor::GetMutex()
+std::mutex& ExternalCommandProcessor::GetMutex()
 {
-	static boost::mutex mtx;
+	static std::mutex mtx;
 	return mtx;
 }
 

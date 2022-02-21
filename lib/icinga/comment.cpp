@@ -12,12 +12,13 @@
 using namespace icinga;
 
 static int l_NextCommentID = 1;
-static boost::mutex l_CommentMutex;
+static std::mutex l_CommentMutex;
 static std::map<int, String> l_LegacyCommentsCache;
 static Timer::Ptr l_CommentsExpireTimer;
 
 boost::signals2::signal<void (const Comment::Ptr&)> Comment::OnCommentAdded;
 boost::signals2::signal<void (const Comment::Ptr&)> Comment::OnCommentRemoved;
+boost::signals2::signal<void (const Comment::Ptr&, const String&, double, const MessageOrigin::Ptr&)> Comment::OnRemovalInfoChanged;
 
 REGISTER_TYPE(Comment);
 
@@ -82,12 +83,12 @@ void Comment::Start(bool runtimeCreated)
 	boost::call_once(once, [this]() {
 		l_CommentsExpireTimer = new Timer();
 		l_CommentsExpireTimer->SetInterval(60);
-		l_CommentsExpireTimer->OnTimerExpired.connect(std::bind(&Comment::CommentsExpireTimerHandler));
+		l_CommentsExpireTimer->OnTimerExpired.connect([](const Timer * const&) { CommentsExpireTimerHandler(); });
 		l_CommentsExpireTimer->Start();
 	});
 
 	{
-		boost::mutex::scoped_lock lock(l_CommentMutex);
+		std::unique_lock<std::mutex> lock(l_CommentMutex);
 
 		SetLegacyId(l_NextCommentID);
 		l_LegacyCommentsCache[l_NextCommentID] = GetName();
@@ -124,7 +125,7 @@ bool Comment::IsExpired() const
 
 int Comment::GetNextCommentID()
 {
-	boost::mutex::scoped_lock lock(l_CommentMutex);
+	std::unique_lock<std::mutex> lock(l_CommentMutex);
 
 	return l_NextCommentID;
 }
@@ -185,7 +186,8 @@ String Comment::AddComment(const Checkable::Ptr& checkable, CommentType entryTyp
 	return fullName;
 }
 
-void Comment::RemoveComment(const String& id, const MessageOrigin::Ptr& origin)
+void Comment::RemoveComment(const String& id, bool removedManually, const String& removedBy,
+	const MessageOrigin::Ptr& origin)
 {
 	Comment::Ptr comment = Comment::GetByName(id);
 
@@ -194,6 +196,10 @@ void Comment::RemoveComment(const String& id, const MessageOrigin::Ptr& origin)
 
 	Log(LogNotice, "Comment")
 		<< "Removed comment '" << comment->GetName() << "' from object '" << comment->GetCheckable()->GetName() << "'.";
+
+	if (removedManually) {
+		comment->SetRemovalInfo(removedBy, Utility::GetTime());
+	}
 
 	Array::Ptr errors = new Array();
 
@@ -207,9 +213,20 @@ void Comment::RemoveComment(const String& id, const MessageOrigin::Ptr& origin)
 	}
 }
 
+void Comment::SetRemovalInfo(const String& removedBy, double removeTime, const MessageOrigin::Ptr& origin) {
+	{
+		ObjectLock olock(this);
+
+		SetRemovedBy(removedBy, false, origin);
+		SetRemoveTime(removeTime, false, origin);
+	}
+
+	OnRemovalInfoChanged(this, removedBy, removeTime, origin);
+}
+
 String Comment::GetCommentIDFromLegacyID(int id)
 {
-	boost::mutex::scoped_lock lock(l_CommentMutex);
+	std::unique_lock<std::mutex> lock(l_CommentMutex);
 
 	auto it = l_LegacyCommentsCache.find(id);
 

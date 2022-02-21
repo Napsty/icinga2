@@ -15,25 +15,44 @@ using namespace icinga;
 REGISTER_TYPE_WITH_PROTOTYPE(Checkable, Checkable::GetPrototype());
 INITIALIZE_ONCE(&Checkable::StaticInitialize);
 
+const std::map<String, int> Checkable::m_FlappingStateFilterMap ({
+	{"OK", FlappingStateFilterOk},
+	{"Warning", FlappingStateFilterWarning},
+	{"Critical", FlappingStateFilterCritical},
+	{"Unknown", FlappingStateFilterUnknown},
+	{"Up", FlappingStateFilterOk},
+	{"Down", FlappingStateFilterCritical},
+});
+
 boost::signals2::signal<void (const Checkable::Ptr&, const String&, const String&, AcknowledgementType, bool, bool, double, double, const MessageOrigin::Ptr&)> Checkable::OnAcknowledgementSet;
 boost::signals2::signal<void (const Checkable::Ptr&, const String&, double, const MessageOrigin::Ptr&)> Checkable::OnAcknowledgementCleared;
 boost::signals2::signal<void (const Checkable::Ptr&, double)> Checkable::OnFlappingChange;
 
 static Timer::Ptr l_CheckablesFireSuppressedNotifications;
+static Timer::Ptr l_CleanDeadlinedExecutions;
+
+thread_local std::function<void(const Value& commandLine, const ProcessResult&)> Checkable::ExecuteCommandProcessFinishedHandler;
 
 void Checkable::StaticInitialize()
 {
 	/* fixed downtime start */
-	Downtime::OnDowntimeStarted.connect(std::bind(&Checkable::NotifyFixedDowntimeStart, _1));
+	Downtime::OnDowntimeStarted.connect([](const Downtime::Ptr& downtime) { Checkable::NotifyFixedDowntimeStart(downtime); });
 	/* flexible downtime start */
-	Downtime::OnDowntimeTriggered.connect(std::bind(&Checkable::NotifyFlexibleDowntimeStart, _1));
+	Downtime::OnDowntimeTriggered.connect([](const Downtime::Ptr& downtime) { Checkable::NotifyFlexibleDowntimeStart(downtime); });
 	/* fixed/flexible downtime end */
-	Downtime::OnDowntimeRemoved.connect(std::bind(&Checkable::NotifyDowntimeEnd, _1));
+	Downtime::OnDowntimeRemoved.connect([](const Downtime::Ptr& downtime) { Checkable::NotifyDowntimeEnd(downtime); });
 }
 
 Checkable::Checkable()
 {
 	SetSchedulingOffset(Utility::Random());
+}
+
+void Checkable::OnConfigLoaded()
+{
+	ObjectImpl<Checkable>::OnConfigLoaded();
+
+	SetFlappingIgnoreStatesFilter(FilterArrayToInt(GetFlappingIgnoreStates(), m_FlappingStateFilterMap, ~0));
 }
 
 void Checkable::OnAllConfigLoaded()
@@ -63,6 +82,14 @@ void Checkable::Start(bool runtimeCreated)
 {
 	double now = Utility::GetTime();
 
+	{
+		auto cr (GetLastCheckResult());
+
+		if (GetLastCheckStarted() > (cr ? cr->GetExecutionEnd() : 0.0)) {
+			SetNextCheck(GetLastCheckStarted());
+		}
+	}
+
 	if (GetNextCheck() < now + 60) {
 		double delta = std::min(GetCheckInterval(), 60.0);
 		delta *= (double)std::rand() / RAND_MAX;
@@ -78,12 +105,17 @@ void Checkable::Start(bool runtimeCreated)
 		l_CheckablesFireSuppressedNotifications->SetInterval(5);
 		l_CheckablesFireSuppressedNotifications->OnTimerExpired.connect(&Checkable::FireSuppressedNotifications);
 		l_CheckablesFireSuppressedNotifications->Start();
+
+		l_CleanDeadlinedExecutions = new Timer();
+		l_CleanDeadlinedExecutions->SetInterval(300);
+		l_CleanDeadlinedExecutions->OnTimerExpired.connect(&Checkable::CleanDeadlinedExecutions);
+		l_CleanDeadlinedExecutions->Start();
 	});
 }
 
 void Checkable::AddGroup(const String& name)
 {
-	boost::mutex::scoped_lock lock(m_CheckableMutex);
+	std::unique_lock<std::mutex> lock(m_CheckableMutex);
 
 	Array::Ptr groups;
 	auto *host = dynamic_cast<Host *>(this);
@@ -224,8 +256,8 @@ void Checkable::NotifyDowntimeInternal(const Downtime::Ptr& downtime)
 
 void Checkable::NotifyDowntimeEnd(const Downtime::Ptr& downtime)
 {
-	/* don't send notifications for flexible downtimes which never triggered */
-	if (!downtime->GetFixed() && !downtime->IsTriggered())
+	/* don't send notifications for downtimes which never triggered */
+	if (!downtime->IsTriggered())
 		return;
 
 	Checkable::Ptr checkable = downtime->GetCheckable();
@@ -256,4 +288,35 @@ void Checkable::ValidateMaxCheckAttempts(const Lazy<int>& lvalue, const Validati
 
 	if (lvalue() <= 0)
 		BOOST_THROW_EXCEPTION(ValidationError(this, { "max_check_attempts" }, "Value must be greater than 0."));
+}
+
+void Checkable::CleanDeadlinedExecutions(const Timer * const&)
+{
+	double now = Utility::GetTime();
+	Dictionary::Ptr executions;
+	Dictionary::Ptr execution;
+
+	for (auto& host : ConfigType::GetObjectsByType<Host>()) {
+		executions = host->GetExecutions();
+		if (executions) {
+			for (const String& key : executions->GetKeys()) {
+				execution = executions->Get(key);
+				if (execution->Contains("deadline") && now > execution->Get("deadline")) {
+					executions->Remove(key);
+				}
+			}
+		}
+	}
+
+	for (auto& service : ConfigType::GetObjectsByType<Service>()) {
+		executions = service->GetExecutions();
+		if (executions) {
+			for (const String& key : executions->GetKeys()) {
+				execution = executions->Get(key);
+				if (execution->Contains("deadline") && now > execution->Get("deadline")) {
+					executions->Remove(key);
+				}
+			}
+		}
+	}
 }

@@ -866,8 +866,8 @@ CREATE TABLE IF NOT EXISTS icinga_objects (
   object_id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
   instance_id bigint unsigned default 0,
   objecttype_id bigint unsigned default 0,
-  name1 varchar(128) character set latin1 collate latin1_general_cs  default '',
-  name2 varchar(128) character set latin1 collate latin1_general_cs default NULL,
+  name1 varchar(255) character set latin1 collate latin1_general_cs  default '',
+  name2 varchar(255) character set latin1 collate latin1_general_cs default NULL,
   is_active smallint default 0,
   PRIMARY KEY  (object_id),
   KEY objecttype_id (objecttype_id,name1,name2)
@@ -1660,7 +1660,7 @@ CREATE INDEX idx_comments_remove ON icinga_comments (object_id, entry_time);
 -- -----------------------------------------
 -- set dbversion
 -- -----------------------------------------
-INSERT INTO icinga_dbversion (name, version, create_time, modify_time) VALUES ('idoutils', '1.14.3', NOW(), NOW())
-ON DUPLICATE KEY UPDATE version='1.14.3', modify_time=NOW();
+INSERT INTO icinga_dbversion (name, version, create_time, modify_time) VALUES ('idoutils', '1.15.1', NOW(), NOW())
+ON DUPLICATE KEY UPDATE version='1.15.1', modify_time=NOW();
 
 

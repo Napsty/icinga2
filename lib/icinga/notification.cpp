@@ -133,6 +133,9 @@ void Notification::Start(bool runtimeCreated)
 	if (ApiListener::IsHACluster() && GetNextNotification() < Utility::GetTime() + 60)
 		SetNextNotification(Utility::GetTime() + 60, true);
 
+	for (const UserGroup::Ptr& group : GetUserGroups())
+		group->AddNotification(this);
+
 	ObjectImpl<Notification>::Start(runtimeCreated);
 }
 
@@ -144,6 +147,9 @@ void Notification::Stop(bool runtimeRemoved)
 
 	if (obj)
 		obj->UnregisterNotification(this);
+
+	for (const UserGroup::Ptr& group : GetUserGroups())
+		group->RemoveNotification(this);
 }
 
 Checkable::Ptr Notification::GetCheckable() const
@@ -234,6 +240,39 @@ void Notification::BeginExecuteNotification(NotificationType type, const CheckRe
 			Log(LogNotice, "Notification")
 				<< "Not sending " << (reminder ? "reminder " : "") << "notifications for notification object '" << notificationName
 				<< "': not in timeperiod '" << tp->GetName() << "'";
+
+			if (!reminder) {
+				switch (type) {
+					case NotificationProblem:
+					case NotificationRecovery:
+					case NotificationFlappingStart:
+					case NotificationFlappingEnd:
+						{
+							/* If a non-reminder notification was suppressed, but just because of its time period,
+							 * stash it into a notification types bitmask for maybe re-sending later.
+							 */
+
+							ObjectLock olock (this);
+							int suppressedTypesBefore (GetSuppressedNotifications());
+							int suppressedTypesAfter (suppressedTypesBefore | type);
+
+							for (int conflict : {NotificationProblem | NotificationRecovery, NotificationFlappingStart | NotificationFlappingEnd}) {
+								/* E.g. problem and recovery notifications neutralize each other. */
+
+								if ((suppressedTypesAfter & conflict) == conflict) {
+									suppressedTypesAfter &= ~conflict;
+								}
+							}
+
+							if (suppressedTypesAfter != suppressedTypesBefore) {
+								SetSuppressedNotifications(suppressedTypesAfter);
+							}
+						}
+					default:
+						; // Cheating the compiler on "5 enumeration values not handled in switch"
+				}
+			}
+
 			return;
 		}
 
@@ -253,6 +292,12 @@ void Notification::BeginExecuteNotification(NotificationType type, const CheckRe
 				 * delaying the first notification
 				 */
 				SetNextNotification(checkable->GetLastHardStateChange() + timesBegin + 1.0);
+
+				/*
+				 * We need to set no more notifications to false, in case
+				 * some notifications were sent previously
+				 */
+				SetNoMoreNotifications(false);
 
 				return;
 			}
@@ -398,7 +443,11 @@ void Notification::BeginExecuteNotification(NotificationType type, const CheckRe
 			<< "Sending " << (reminder ? "reminder " : "") << "'" << NotificationTypeToString(type) << "' notification '"
 			<< notificationName << "' for user '" << userName << "'";
 
-		Utility::QueueAsyncCallback(std::bind(&Notification::ExecuteNotificationHelper, this, type, user, cr, force, author, text));
+		// Explicitly use Notification::Ptr to keep the reference counted while the callback is active
+		Notification::Ptr notification (this);
+		Utility::QueueAsyncCallback([notification, type, user, cr, force, author, text]() {
+			notification->ExecuteNotificationHelper(type, user, cr, force, author, text);
+		});
 
 		/* collect all notified users */
 		allNotifiedUsers.insert(user);

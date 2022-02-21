@@ -27,16 +27,16 @@ class Service : Checkable < ServiceNameComposer
 	load_after Host;
 	load_after Zone;
 
-	[config, no_user_modify, required] array(name(ServiceGroup)) groups {
+	[config, no_user_modify, required, signal_with_old_value] array(name(ServiceGroup)) groups {
 		default {{{ return new Array(); }}}
 	};
 
 	[config] String display_name {
 		get {{{
-			if (m_DisplayName.IsEmpty())
+			if (m_DisplayName.m_Value.IsEmpty())
 				return GetShortName();
 			else
-				return m_DisplayName;
+				return m_DisplayName.m_Value;
 		}}}
 	};
 	[config, required] name(Host) host_name;

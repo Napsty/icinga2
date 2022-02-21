@@ -7,6 +7,7 @@
 #include "config/configcompiler.hpp"
 #include "base/configwriter.hpp"
 #include "base/configtype.hpp"
+#include "base/exception.hpp"
 #include "base/logger.hpp"
 #include "base/objectlock.hpp"
 #include "base/convert.hpp"
@@ -100,7 +101,7 @@ int IcingaApplication::Main()
 	/* periodically dump the program state */
 	l_RetentionTimer = new Timer();
 	l_RetentionTimer->SetInterval(300);
-	l_RetentionTimer->OnTimerExpired.connect(std::bind(&IcingaApplication::DumpProgramState, this));
+	l_RetentionTimer->OnTimerExpired.connect([this](const Timer * const&) { DumpProgramState(); });
 	l_RetentionTimer->Start();
 
 	RunEventLoop();
@@ -163,12 +164,20 @@ void IcingaApplication::DumpModifiedAttributes()
 {
 	String path = Configuration::ModAttrPath;
 
+	try {
+		Utility::Glob(path + ".tmp.*", &Utility::Remove, GlobFile);
+	} catch (const std::exception& ex) {
+		Log(LogWarning, "IcingaApplication") << DiagnosticInformation(ex);
+	}
+
 	std::fstream fp;
-	String tempFilename = Utility::CreateTempFile(path + ".XXXXXX", 0644, fp);
+	String tempFilename = Utility::CreateTempFile(path + ".tmp.XXXXXX", 0644, fp);
 	fp.exceptions(std::ofstream::failbit | std::ofstream::badbit);
 
 	ConfigObject::Ptr previousObject;
-	ConfigObject::DumpModifiedAttributes(std::bind(&PersistModAttrHelper, std::ref(fp), std::ref(previousObject), _1, _2, _3));
+	ConfigObject::DumpModifiedAttributes([&fp, &previousObject](const ConfigObject::Ptr& object, const String& attr, const Value& value) {
+		PersistModAttrHelper(fp, previousObject, object, attr, value);
+	});
 
 	if (previousObject) {
 		ConfigWriter::EmitRaw(fp, "\tobj.version = ");

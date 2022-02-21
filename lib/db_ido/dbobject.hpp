@@ -61,8 +61,14 @@ public:
 
 	static DbObject::Ptr GetOrCreateByObject(const ConfigObject::Ptr& object);
 
+	struct QueryCallbacks {
+		std::function<void(const DbQuery&)> Query;
+		std::function<void(const std::vector<DbQuery>&)> MultipleQueries;
+	};
+
 	static boost::signals2::signal<void (const DbQuery&)> OnQuery;
 	static boost::signals2::signal<void (const std::vector<DbQuery>&)> OnMultipleQueries;
+	static boost::signals2::signal<void (const std::function<void (const QueryCallbacks&)>&)> OnMakeQueries;
 
 	void SendConfigUpdateHeavy(const Dictionary::Ptr& configFields);
 	void SendConfigUpdateLight();
@@ -96,7 +102,7 @@ private:
 	static void VarsChangedHandler(const CustomVarObject::Ptr& object);
 	static void VersionChangedHandler(const ConfigObject::Ptr& object);
 
-	static boost::mutex& GetStaticMutex();
+	static std::mutex& GetStaticMutex();
 
 	friend class DbType;
 };

@@ -33,7 +33,7 @@ using namespace icinga;
 
 #define IOTHREADS 4
 
-static boost::mutex l_ProcessMutex[IOTHREADS];
+static std::mutex l_ProcessMutex[IOTHREADS];
 static std::map<Process::ProcessHandle, Process::Ptr> l_Processes[IOTHREADS];
 #ifdef _WIN32
 static HANDLE l_Events[IOTHREADS];
@@ -41,7 +41,7 @@ static HANDLE l_Events[IOTHREADS];
 static int l_EventFDs[IOTHREADS][2];
 static std::map<Process::ConsoleHandle, Process::ProcessHandle> l_FDs[IOTHREADS];
 
-static boost::mutex l_ProcessControlMutex;
+static std::mutex l_ProcessControlMutex;
 static int l_ProcessControlFD = -1;
 static pid_t l_ProcessControlPID;
 #endif /* _WIN32 */
@@ -49,10 +49,14 @@ static boost::once_flag l_ProcessOnceFlag = BOOST_ONCE_INIT;
 static boost::once_flag l_SpawnHelperOnceFlag = BOOST_ONCE_INIT;
 
 Process::Process(Process::Arguments arguments, Dictionary::Ptr extraEnvironment)
-	: m_Arguments(std::move(arguments)), m_ExtraEnvironment(std::move(extraEnvironment)), m_Timeout(600), m_AdjustPriority(false)
+	: m_Arguments(std::move(arguments)), m_ExtraEnvironment(std::move(extraEnvironment)),
+	  m_Timeout(600)
 #ifdef _WIN32
 	, m_ReadPending(false), m_ReadFailed(false), m_Overlapped()
+#else /* _WIN32 */
+	, m_SentSigterm(false)
 #endif /* _WIN32 */
+	, m_AdjustPriority(false), m_ResultAvailable(false)
 {
 #ifdef _WIN32
 	m_Overlapped.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
@@ -100,23 +104,35 @@ static Value ProcessSpawnImpl(struct msghdr *msgh, const Dictionary::Ptr& reques
 		envc++;
 
 	auto **envp = new char *[envc + (extraEnvironment ? extraEnvironment->GetLength() : 0) + 2];
+	const char* lcnumeric = "LC_NUMERIC=";
+	const char* notifySocket = "NOTIFY_SOCKET=";
+	int j = 0;
 
-	for (int i = 0; i < envc; i++)
-		envp[i] = strdup(environ[i]);
+	for (int i = 0; i < envc; i++) {
+		if (strncmp(environ[i], lcnumeric, strlen(lcnumeric)) == 0) {
+			continue;
+		}
+
+		if (strncmp(environ[i], notifySocket, strlen(notifySocket)) == 0) {
+			continue;
+		}
+
+		envp[j] = strdup(environ[i]);
+		++j;
+	}
 
 	if (extraEnvironment) {
 		ObjectLock olock(extraEnvironment);
 
-		int index = envc;
 		for (const Dictionary::Pair& kv : extraEnvironment) {
 			String skv = kv.first + "=" + Convert::ToString(kv.second);
-			envp[index] = strdup(skv.CStr());
-			index++;
+			envp[j] = strdup(skv.CStr());
+			j++;
 		}
 	}
 
-	envp[envc + (extraEnvironment ? extraEnvironment->GetLength() : 0)] = strdup("LC_NUMERIC=C");
-	envp[envc + (extraEnvironment ? extraEnvironment->GetLength() : 0) + 1] = nullptr;
+	envp[j] = strdup("LC_NUMERIC=C");
+	envp[j + 1] = nullptr;
 
 	extraEnvironment.reset();
 
@@ -232,17 +248,7 @@ static void ProcessHandler()
 	sigfillset(&mask);
 	sigprocmask(SIG_SETMASK, &mask, nullptr);
 
-	rlimit rl;
-	if (getrlimit(RLIMIT_NOFILE, &rl) >= 0) {
-		rlim_t maxfds = rl.rlim_max;
-
-		if (maxfds == RLIM_INFINITY)
-			maxfds = 65536;
-
-		for (rlim_t i = 3; i < maxfds; i++)
-			if (i != static_cast<rlim_t>(l_ProcessControlFD))
-				(void)close(i);
-	}
+	Utility::CloseAllFDs({0, 1, 2, l_ProcessControlFD});
 
 	for (;;) {
 		size_t length;
@@ -374,7 +380,7 @@ static pid_t ProcessSpawn(const std::vector<String>& arguments, const Dictionary
 	String jrequest = JsonEncode(request);
 	size_t length = jrequest.GetLength();
 
-	boost::mutex::scoped_lock lock(l_ProcessControlMutex);
+	std::unique_lock<std::mutex> lock(l_ProcessControlMutex);
 
 	struct msghdr msg;
 	memset(&msg, 0, sizeof(msg));
@@ -433,7 +439,7 @@ static int ProcessKill(pid_t pid, int signum)
 	String jrequest = JsonEncode(request);
 	size_t length = jrequest.GetLength();
 
-	boost::mutex::scoped_lock lock(l_ProcessControlMutex);
+	std::unique_lock<std::mutex> lock(l_ProcessControlMutex);
 
 	do {
 		while (send(l_ProcessControlFD, &length, sizeof(length), 0) < 0) {
@@ -464,7 +470,7 @@ static int ProcessWaitPID(pid_t pid, int *status)
 	String jrequest = JsonEncode(request);
 	size_t length = jrequest.GetLength();
 
-	boost::mutex::scoped_lock lock(l_ProcessControlMutex);
+	std::unique_lock<std::mutex> lock(l_ProcessControlMutex);
 
 	do {
 		while (send(l_ProcessControlFD, &length, sizeof(length), 0) < 0) {
@@ -531,7 +537,7 @@ void Process::ThreadInitialize()
 {
 	/* Note to self: Make sure this runs _after_ we've daemonized. */
 	for (int tid = 0; tid < IOTHREADS; tid++) {
-		std::thread t(std::bind(&Process::IOThreadProc, tid));
+		std::thread t([tid]() { IOThreadProc(tid); });
 		t.detach();
 	}
 }
@@ -608,7 +614,7 @@ void Process::IOThreadProc(int tid)
 		now = Utility::GetTime();
 
 		{
-			boost::mutex::scoped_lock lock(l_ProcessMutex[tid]);
+			std::unique_lock<std::mutex> lock(l_ProcessMutex[tid]);
 
 			count = 1 + l_Processes[tid].size();
 #ifdef _WIN32
@@ -650,7 +656,7 @@ void Process::IOThreadProc(int tid)
 #endif /* _WIN32 */
 
 				if (process->m_Timeout != 0) {
-					double delta = process->m_Timeout - (now - process->m_Result.ExecutionStart);
+					double delta = process->GetNextTimeout() - (now - process->m_Result.ExecutionStart);
 
 					if (timeout == -1 || delta < timeout)
 						timeout = delta;
@@ -677,7 +683,7 @@ void Process::IOThreadProc(int tid)
 		now = Utility::GetTime();
 
 		{
-			boost::mutex::scoped_lock lock(l_ProcessMutex[tid]);
+			std::unique_lock<std::mutex> lock(l_ProcessMutex[tid]);
 
 #ifdef _WIN32
 			if (rc == WAIT_OBJECT_0)
@@ -708,7 +714,7 @@ void Process::IOThreadProc(int tid)
 				bool is_timeout = false;
 
 				if (it->second->m_Timeout != 0) {
-					double timeout = it->second->m_Result.ExecutionStart + it->second->m_Timeout;
+					double timeout = it->second->m_Result.ExecutionStart + it->second->GetNextTimeout();
 
 					if (timeout < now)
 						is_timeout = true;
@@ -918,8 +924,14 @@ void Process::Run(const std::function<void(const ProcessResult&)>& callback)
 
 		delete [] args;
 
-		if (callback)
-			Utility::QueueAsyncCallback(std::bind(callback, m_Result));
+		if (callback) {
+			/*
+			 * Explicitly use Process::Ptr to keep the reference counted while the
+			 * callback is active and making it crash safe
+			 */
+			Process::Ptr process(this);
+			Utility::QueueAsyncCallback([this, process, callback]() { callback(m_Result); });
+		}
 
 		return;
 	}
@@ -992,7 +1004,7 @@ void Process::Run(const std::function<void(const ProcessResult&)>& callback)
 	int tid = GetTID();
 
 	{
-		boost::mutex::scoped_lock lock(l_ProcessMutex[tid]);
+		std::unique_lock<std::mutex> lock(l_ProcessMutex[tid]);
 		l_Processes[tid][m_Process] = this;
 #ifndef _WIN32
 		l_FDs[tid][m_FD] = m_Process;
@@ -1007,6 +1019,12 @@ void Process::Run(const std::function<void(const ProcessResult&)>& callback)
 #endif /* _WIN32 */
 }
 
+const ProcessResult& Process::WaitForResult() {
+	std::unique_lock<std::mutex> lock(m_ResultMutex);
+	m_ResultCondition.wait(lock, [this]{ return m_ResultAvailable; });
+	return m_Result;
+}
+
 bool Process::DoEvents()
 {
 	bool is_timeout = false;
@@ -1015,15 +1033,42 @@ bool Process::DoEvents()
 #endif /* _WIN32 */
 
 	if (m_Timeout != 0) {
-		double timeout = m_Result.ExecutionStart + m_Timeout;
+		auto now (Utility::GetTime());
 
-		if (timeout < Utility::GetTime()) {
+#ifndef _WIN32
+		{
+			auto timeout (GetNextTimeout());
+			auto deadline (m_Result.ExecutionStart + timeout);
+
+			if (deadline < now && !m_SentSigterm) {
+				Log(LogWarning, "Process")
+					<< "Terminating process " << m_PID << " (" << PrettyPrintArguments(m_Arguments)
+					<< ") after timeout of " << timeout << " seconds";
+
+				m_OutputStream << "<Timeout exceeded.>";
+
+				int error = ProcessKill(m_Process, SIGTERM);
+				if (error) {
+					Log(LogWarning, "Process")
+						<< "Couldn't terminate the process " << m_PID << " (" << PrettyPrintArguments(m_Arguments)
+						<< "): [errno " << error << "] " << strerror(error);
+				}
+
+				m_SentSigterm = true;
+			}
+		}
+#endif /* _WIN32 */
+
+		auto timeout (GetNextTimeout());
+		auto deadline (m_Result.ExecutionStart + timeout);
+
+		if (deadline < now) {
 			Log(LogWarning, "Process")
 				<< "Killing process group " << m_PID << " (" << PrettyPrintArguments(m_Arguments)
-				<< ") after timeout of " << m_Timeout << " seconds";
+				<< ") after timeout of " << timeout << " seconds";
 
-			m_OutputStream << "<Timeout exceeded.>";
 #ifdef _WIN32
+			m_OutputStream << "<Timeout exceeded.>";
 			TerminateProcess(m_Process, 3);
 #else /* _WIN32 */
 			int error = ProcessKill(-m_Process, SIGKILL);
@@ -1088,8 +1133,14 @@ bool Process::DoEvents()
 	} else if (WIFEXITED(status)) {
 		exitcode = WEXITSTATUS(status);
 
-		Log(LogNotice, "Process")
-			<< "PID " << m_PID << " (" << PrettyPrintArguments(m_Arguments) << ") terminated with exit code " << exitcode;
+		Log msg(LogNotice, "Process");
+		msg << "PID " << m_PID << " (" << PrettyPrintArguments(m_Arguments)
+			<< ") terminated with exit code " << exitcode;
+
+		if (m_SentSigterm) {
+			exitcode = 128;
+			msg << " after sending SIGTERM";
+		}
 	} else if (WIFSIGNALED(status)) {
 		int signum = WTERMSIG(status);
 		const char *zsigname = strsignal(signum);
@@ -1114,13 +1165,24 @@ bool Process::DoEvents()
 	}
 #endif /* _WIN32 */
 
-	m_Result.PID = m_PID;
-	m_Result.ExecutionEnd = Utility::GetTime();
-	m_Result.ExitStatus = exitcode;
-	m_Result.Output = output;
+	{
+		std::lock_guard<std::mutex> lock(m_ResultMutex);
+		m_Result.PID = m_PID;
+		m_Result.ExecutionEnd = Utility::GetTime();
+		m_Result.ExitStatus = exitcode;
+		m_Result.Output = output;
+		m_ResultAvailable = true;
+	}
+	m_ResultCondition.notify_all();
 
-	if (m_Callback)
-		Utility::QueueAsyncCallback(std::bind(m_Callback, m_Result));
+	if (m_Callback) {
+		/*
+		 * Explicitly use Process::Ptr to keep the reference counted while the
+		 * callback is active and making it crash safe
+		 */
+		Process::Ptr process(this);
+		Utility::QueueAsyncCallback([this, process]() { m_Callback(m_Result); });
+	}
 
 	return false;
 }
@@ -1136,3 +1198,11 @@ int Process::GetTID() const
 	return (reinterpret_cast<uintptr_t>(this) / sizeof(void *)) % IOTHREADS;
 }
 
+double Process::GetNextTimeout() const
+{
+#ifdef _WIN32
+	return m_Timeout;
+#else /* _WIN32 */
+	return m_SentSigterm ? m_Timeout * 1.1 : m_Timeout;
+#endif /* _WIN32 */
+}

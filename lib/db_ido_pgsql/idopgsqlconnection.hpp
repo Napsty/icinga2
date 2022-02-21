@@ -30,6 +30,9 @@ public:
 
 	static void StatsFunc(const Dictionary::Ptr& status, const Array::Ptr& perfdata);
 
+	const char * GetLatestSchemaVersion() const noexcept override;
+	const char * GetCompatSchemaVersion() const noexcept override;
+
 	int GetPendingQueryCount() const override;
 
 protected:
@@ -44,11 +47,10 @@ protected:
 	void CleanUpExecuteQuery(const String& table, const String& time_key, double time_value) override;
 	void FillIDCache(const DbType::Ptr& type) override;
 	void NewTransaction() override;
+	void Disconnect() override;
 
 private:
 	DbReference m_InstanceID;
-
-	WorkQueue m_QueryQueue{1000000};
 
 	Library m_Library;
 	std::unique_ptr<PgsqlInterface, PgsqlInterfaceDeleter> m_Pgsql;
@@ -69,13 +71,11 @@ private:
 	void InternalActivateObject(const DbObject::Ptr& dbobj);
 	void InternalDeactivateObject(const DbObject::Ptr& dbobj);
 
-	void Disconnect();
 	void InternalNewTransaction();
 	void Reconnect();
 
 	void AssertOnWorkQueue();
 
-	void TxTimerHandler();
 	void ReconnectTimerHandler();
 
 	void StatsLoggerTimerHandler();

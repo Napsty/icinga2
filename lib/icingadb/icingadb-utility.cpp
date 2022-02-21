@@ -60,30 +60,37 @@ String IcingaDB::FormatCommandLine(const Value& commandLine)
 	return result;
 }
 
-String IcingaDB::GetEnvironment()
-{
-	return ConfigType::GetObjectsByType<IcingaApplication>()[0]->GetEnvironment();
-}
-
-ArrayData IcingaDB::GetObjectIdentifiersWithoutEnv(const ConfigObject::Ptr& object)
-{
-	Type::Ptr type = object->GetReflectionType();
-
-	if (type == CheckCommand::TypeInstance || type == NotificationCommand::TypeInstance || type == EventCommand::TypeInstance)
-		return {type->GetName(), object->GetName()};
-	else
-		return {object->GetName()};
-}
-
 String IcingaDB::GetObjectIdentifier(const ConfigObject::Ptr& object)
 {
-	return HashValue(new Array(Prepend(GetEnvironment(), GetObjectIdentifiersWithoutEnv(object))));
+	return HashValue(new Array({m_EnvironmentId, object->GetName()}));
+}
+
+/**
+ * Calculates a deterministic history event ID like SHA1(env, eventType, x...[, nt][, eventTime])
+ *
+ * Where SHA1(env, x...) = GetObjectIdentifier(object)
+ */
+String IcingaDB::CalcEventID(const char* eventType, const ConfigObject::Ptr& object, double eventTime, NotificationType nt)
+{
+	Array::Ptr rawId = new Array({object->GetName()});
+	rawId->Insert(0, m_EnvironmentId);
+	rawId->Insert(1, eventType);
+
+	if (nt) {
+		rawId->Add(GetNotificationTypeByEnum(nt));
+	}
+
+	if (eventTime) {
+		rawId->Add(TimestampToMilliseconds(eventTime));
+	}
+
+	return HashValue(std::move(rawId));
 }
 
 static const std::set<String> metadataWhitelist ({"package", "source_location", "templates"});
 
 /**
- * Prepare object's custom vars for being written to Redis
+ * Prepare custom vars for being written to Redis
  *
  * object.vars = {
  *   "disks": {
@@ -96,7 +103,7 @@ static const std::set<String> metadataWhitelist ({"package", "source_location", 
  *
  * return {
  *   SHA1(PackObject([
- *     Environment,
+ *     EnvironmentId,
  *     "disks",
  *     {
  *       "disk": {},
@@ -105,7 +112,7 @@ static const std::set<String> metadataWhitelist ({"package", "source_location", 
  *       }
  *     }
  *   ])): {
- *     "envId": SHA1(Environment),
+ *     "environment_id": EnvironmentId,
  *     "name_checksum": SHA1("disks"),
  *     "name": "disks",
  *     "value": {
@@ -117,28 +124,24 @@ static const std::set<String> metadataWhitelist ({"package", "source_location", 
  *   }
  * }
  *
- * @param	object	Config object with custom vars
+ * @param	Dictionary	Config object with custom vars
  *
- * @return 			JSON-like data structure for Redis
+ * @return 				JSON-like data structure for Redis
  */
-Dictionary::Ptr IcingaDB::SerializeVars(const CustomVarObject::Ptr& object)
+Dictionary::Ptr IcingaDB::SerializeVars(const Dictionary::Ptr& vars)
 {
-	Dictionary::Ptr vars = object->GetVars();
-
 	if (!vars)
 		return nullptr;
 
 	Dictionary::Ptr res = new Dictionary();
-	auto env (GetEnvironment());
-	auto envChecksum (SHA1(env));
 
 	ObjectLock olock(vars);
 
 	for (auto& kv : vars) {
 		res->Set(
-			SHA1(PackObject((Array::Ptr)new Array({env, kv.first, kv.second}))),
+			SHA1(PackObject((Array::Ptr)new Array({m_EnvironmentId, kv.first, kv.second}))),
 			(Dictionary::Ptr)new Dictionary({
-				{"environment_id", envChecksum},
+				{"environment_id", m_EnvironmentId},
 				{"name_checksum", SHA1(kv.first)},
 				{"name", kv.first},
 				{"value", JsonEncode(kv.second)},
@@ -147,6 +150,32 @@ Dictionary::Ptr IcingaDB::SerializeVars(const CustomVarObject::Ptr& object)
 	}
 
 	return res;
+}
+
+const char* IcingaDB::GetNotificationTypeByEnum(NotificationType type)
+{
+	switch (type) {
+		case NotificationDowntimeStart:
+			return "downtime_start";
+		case NotificationDowntimeEnd:
+			return "downtime_end";
+		case NotificationDowntimeRemoved:
+			return "downtime_removed";
+		case NotificationCustom:
+			return "custom";
+		case NotificationAcknowledgement:
+			return "acknowledgement";
+		case NotificationProblem:
+			return "problem";
+		case NotificationRecovery:
+			return "recovery";
+		case NotificationFlappingStart:
+			return "flapping_start";
+		case NotificationFlappingEnd:
+			return "flapping_end";
+	}
+
+	VERIFY(!"Invalid notification type.");
 }
 
 static const std::set<String> propertiesBlacklistEmpty;
@@ -211,4 +240,65 @@ String IcingaDB::GetLowerCaseTypeNameDB(const ConfigObject::Ptr& obj)
 
 long long IcingaDB::TimestampToMilliseconds(double timestamp) {
 	return static_cast<long long>(timestamp * 1000);
+}
+
+String IcingaDB::IcingaToStreamValue(const Value& value)
+{
+	switch (value.GetType()) {
+		case ValueBoolean:
+			return Convert::ToString(int(value));
+		case ValueString:
+			return Utility::ValidateUTF8(value);
+		case ValueNumber:
+		case ValueEmpty:
+			return Convert::ToString(value);
+		default:
+			return JsonEncode(value);
+	}
+}
+
+// Returns the items that exist in "arrayOld" but not in "arrayNew"
+std::vector<Value> IcingaDB::GetArrayDeletedValues(const Array::Ptr& arrayOld, const Array::Ptr& arrayNew) {
+	std::vector<Value> deletedValues;
+
+	if (!arrayOld) {
+		return deletedValues;
+	}
+
+	if (!arrayNew) {
+		return std::vector<Value>(arrayOld->Begin(), arrayOld->End());
+	}
+
+	std::vector<Value> vectorOld(arrayOld->Begin(), arrayOld->End());
+	std::sort(vectorOld.begin(), vectorOld.end());
+	vectorOld.erase(std::unique(vectorOld.begin(), vectorOld.end()), vectorOld.end());
+
+	std::vector<Value> vectorNew(arrayNew->Begin(), arrayNew->End());
+	std::sort(vectorNew.begin(), vectorNew.end());
+	vectorNew.erase(std::unique(vectorNew.begin(), vectorNew.end()), vectorNew.end());
+
+	std::set_difference(vectorOld.begin(), vectorOld.end(), vectorNew.begin(), vectorNew.end(), std::back_inserter(deletedValues));
+
+	return deletedValues;
+}
+
+// Returns the keys that exist in "dictOld" but not in "dictNew"
+std::vector<String> IcingaDB::GetDictionaryDeletedKeys(const Dictionary::Ptr& dictOld, const Dictionary::Ptr& dictNew) {
+	std::vector<String> deletedKeys;
+
+	if (!dictOld) {
+		return deletedKeys;
+	}
+
+	std::vector<String> oldKeys = dictOld->GetKeys();
+
+	if (!dictNew) {
+		return oldKeys;
+	}
+
+	std::vector<String> newKeys = dictNew->GetKeys();
+
+	std::set_difference(oldKeys.begin(), oldKeys.end(), newKeys.begin(), newKeys.end(), std::back_inserter(deletedKeys));
+
+	return deletedKeys;
 }

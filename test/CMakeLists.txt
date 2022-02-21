@@ -20,6 +20,7 @@ set(base_test_SOURCES
   base-stream.cpp
   base-string.cpp
   base-timer.cpp
+  base-tlsutility.cpp
   base-type.cpp
   base-utility.cpp
   base-value.cpp
@@ -30,6 +31,7 @@ set(base_test_SOURCES
   icinga-macros.cpp
   icinga-notification.cpp
   icinga-perfdata.cpp
+  remote-configpackageutility.cpp
   remote-url.cpp
   ${base_OBJS}
   $<TARGET_OBJECTS:config>
@@ -68,6 +70,7 @@ add_boost_test(base
     base_dictionary/remove
     base_dictionary/clone
     base_dictionary/json
+    base_dictionary/keys_ordered
     base_fifo/construct
     base_fifo/io
     base_json/encode
@@ -105,6 +108,7 @@ add_boost_test(base
     base_timer/interval
     base_timer/invoke
     base_timer/scope
+    base_tlsutility/sha1
     base_type/gettype
     base_type/assign
     base_type/byname
@@ -114,6 +118,8 @@ add_boost_test(base
     base_utility/comparepasswords_works
     base_utility/comparepasswords_issafe
     base_utility/validateutf8
+    base_utility/EscapeCreateProcessArg
+    base_utility/TruncateUsingHash
     base_value/scalar
     base_value/convert
     base_value/format
@@ -134,15 +140,21 @@ add_boost_test(base
     icinga_macros/simple
     icinga_legacytimeperiod/simple
     icinga_legacytimeperiod/advanced
+    icinga_legacytimeperiod/dst
+    icinga_legacytimeperiod/dst_isinside
     icinga_perfdata/empty
     icinga_perfdata/simple
     icinga_perfdata/quotes
     icinga_perfdata/multiple
+    icinga_perfdata/normalize
     icinga_perfdata/uom
     icinga_perfdata/warncritminmax
     icinga_perfdata/ignore_invalid_warn_crit_min_max
     icinga_perfdata/invalid
     icinga_perfdata/multi
+    icinga_perfdata/scientificnotation
+    icinga_perfdata/parse_edgecases
+    remote_configpackageutility/ValidateName
     remote_url/id_and_path
     remote_url/parameters
     remote_url/get_and_set

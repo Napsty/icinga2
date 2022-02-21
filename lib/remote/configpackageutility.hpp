@@ -42,19 +42,26 @@ public:
 	static std::vector<std::pair<String, bool> > GetFiles(const String& packageName, const String& stageName);
 
 	static bool ContainsDotDot(const String& path);
-	static bool ValidateName(const String& name);
+	static bool ValidatePackageName(const String& packageName);
 
-	static boost::mutex& GetStaticPackageMutex();
-	static boost::mutex& GetStaticActiveStageMutex();
+	static inline
+	bool ValidateStageName(const String& stageName)
+	{
+		return ValidateFreshName(stageName);
+	}
+
+	static std::mutex& GetStaticPackageMutex();
+	static std::mutex& GetStaticActiveStageMutex();
 
 private:
-	static void CollectDirNames(const String& path, std::vector<String>& dirs);
 	static void CollectPaths(const String& path, std::vector<std::pair<String, bool> >& paths);
 
 	static void WritePackageConfig(const String& packageName);
 	static void WriteStageConfig(const String& packageName, const String& stageName);
 
 	static void TryActivateStageCallback(const ProcessResult& pr, const String& packageName, const String& stageName, bool activate, bool reload);
+
+	static bool ValidateFreshName(const String& name);
 };
 
 }

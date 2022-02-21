@@ -11,7 +11,7 @@ using namespace icinga;
 
 REGISTER_TYPE(StreamLogger);
 
-boost::mutex StreamLogger::m_Mutex;
+std::mutex StreamLogger::m_Mutex;
 
 void StreamLogger::Stop(bool runtimeRemoved)
 {
@@ -41,6 +41,8 @@ void StreamLogger::FlushLogTimerHandler()
 
 void StreamLogger::Flush()
 {
+	ObjectLock oLock (this);
+
 	if (m_Stream)
 		m_Stream->flush();
 }
@@ -58,7 +60,7 @@ void StreamLogger::BindStream(std::ostream *stream, bool ownsStream)
 	if (!m_FlushLogTimer) {
 		m_FlushLogTimer = new Timer();
 		m_FlushLogTimer->SetInterval(1);
-		m_FlushLogTimer->OnTimerExpired.connect(std::bind(&StreamLogger::FlushLogTimerHandler, this));
+		m_FlushLogTimer->OnTimerExpired.connect([this](const Timer * const&) { FlushLogTimerHandler(); });
 		m_FlushLogTimer->Start();
 	}
 }
@@ -73,7 +75,7 @@ void StreamLogger::ProcessLogEntry(std::ostream& stream, const LogEntry& entry)
 {
 	String timestamp = Utility::FormatDateTime("%Y-%m-%d %H:%M:%S %z", entry.Timestamp);
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	if (Logger::IsTimestampEnabled())
 		stream << "[" << timestamp << "] ";

@@ -3,11 +3,16 @@
 #include "icingadb/icingadb.hpp"
 #include "icingadb/icingadb-ti.cpp"
 #include "icingadb/redisconnection.hpp"
+#include "remote/apilistener.hpp"
 #include "remote/eventqueue.hpp"
+#include "base/configuration.hpp"
 #include "base/json.hpp"
+#include "base/tlsutility.hpp"
+#include "base/utility.hpp"
 #include "icinga/checkable.hpp"
 #include "icinga/host.hpp"
 #include <boost/algorithm/string.hpp>
+#include <fstream>
 #include <memory>
 #include <utility>
 
@@ -17,24 +22,8 @@ using namespace icinga;
 
 using Prio = RedisConnection::QueryPriority;
 
-static const char * const l_LuaPublishStats = R"EOF(
-
-local xa = {'XADD', KEYS[1], '*'}
-
-for i = 1, #ARGV do
-	table.insert(xa, ARGV[i])
-end
-
-local id = redis.call(unpack(xa))
-
-local xr = redis.call('XRANGE', KEYS[1], '-', '+')
-for i = 1, #xr - 1 do
-	redis.call('XDEL', KEYS[1], xr[i][1])
-end
-
-return id
-
-)EOF";
+String IcingaDB::m_EnvironmentId;
+std::once_flag IcingaDB::m_EnvironmentIdOnce;
 
 REGISTER_TYPE(IcingaDB);
 
@@ -45,9 +34,20 @@ IcingaDB::IcingaDB()
 
 	m_WorkQueue.SetName("IcingaDB");
 
-	m_PrefixConfigObject = "icinga:config:";
+	m_PrefixConfigObject = "icinga:";
 	m_PrefixConfigCheckSum = "icinga:checksum:";
-	m_PrefixStateObject = "icinga:config:state:";
+}
+
+void IcingaDB::Validate(int types, const ValidationUtils& utils)
+{
+	ObjectImpl<IcingaDB>::Validate(types, utils);
+
+	if (!(types & FAConfig))
+		return;
+
+	if (GetEnableTls() && GetCertPath().IsEmpty() != GetKeyPath().IsEmpty()) {
+		BOOST_THROW_EXCEPTION(ValidationError(this, std::vector<String>(), "Validation failed: Either both a client certificate (cert_path) and its private key (key_path) or none of them must be given."));
+	}
 }
 
 /**
@@ -57,22 +57,84 @@ void IcingaDB::Start(bool runtimeCreated)
 {
 	ObjectImpl<IcingaDB>::Start(runtimeCreated);
 
+	std::call_once(m_EnvironmentIdOnce, []() {
+		String path = Configuration::DataDir + "/icingadb.env";
+
+		if (Utility::PathExists(path)) {
+			m_EnvironmentId = Utility::LoadJsonFile(path);
+
+			if (m_EnvironmentId.GetLength() != 2*SHA_DIGEST_LENGTH) {
+				throw std::runtime_error("Wrong length of stored Icinga DB environment");
+			}
+
+			for (unsigned char c : m_EnvironmentId) {
+				if (!std::isxdigit(c)) {
+					throw std::runtime_error("Stored Icinga DB environment is not a hex string");
+				}
+			}
+		} else {
+			std::shared_ptr<X509> cert = GetX509Certificate(ApiListener::GetDefaultCaPath());
+
+			unsigned int n;
+			unsigned char digest[EVP_MAX_MD_SIZE];
+			if (X509_pubkey_digest(cert.get(), EVP_sha1(), digest, &n) != 1) {
+				BOOST_THROW_EXCEPTION(openssl_error()
+					<< boost::errinfo_api_function("X509_pubkey_digest")
+					<< errinfo_openssl_error(ERR_peek_error()));
+			}
+
+			m_EnvironmentId = BinaryToHex(digest, n);
+
+			Utility::SaveJsonFile(path, 0600, m_EnvironmentId);
+		}
+
+		m_EnvironmentId = m_EnvironmentId.ToLower();
+	});
+
 	Log(LogInformation, "IcingaDB")
 		<< "'" << GetName() << "' started.";
 
 	m_ConfigDumpInProgress = false;
 	m_ConfigDumpDone = false;
 
-	m_Rcon = new RedisConnection(GetHost(), GetPort(), GetPath(), GetPassword(), GetDbIndex());
-	m_Rcon->Start();
-
 	m_WorkQueue.SetExceptionCallback([this](boost::exception_ptr exp) { ExceptionHandler(std::move(exp)); });
 
-	m_ReconnectTimer = new Timer();
-	m_ReconnectTimer->SetInterval(15);
-	m_ReconnectTimer->OnTimerExpired.connect([this](const Timer * const&) { ReconnectTimerHandler(); });
-	m_ReconnectTimer->Start();
-	m_ReconnectTimer->Reschedule(0);
+	m_Rcon = new RedisConnection(GetHost(), GetPort(), GetPath(), GetPassword(), GetDbIndex(),
+		GetEnableTls(), GetInsecureNoverify(), GetCertPath(), GetKeyPath(), GetCaPath(), GetCrlPath(),
+		GetTlsProtocolmin(), GetCipherList(), GetConnectTimeout(), GetDebugInfo());
+
+	for (const Type::Ptr& type : GetTypes()) {
+		auto ctype (dynamic_cast<ConfigType*>(type.get()));
+		if (!ctype)
+			continue;
+
+		RedisConnection::Ptr con = new RedisConnection(GetHost(), GetPort(), GetPath(), GetPassword(), GetDbIndex(),
+			GetEnableTls(), GetInsecureNoverify(), GetCertPath(), GetKeyPath(), GetCaPath(), GetCrlPath(),
+			GetTlsProtocolmin(), GetCipherList(), GetConnectTimeout(), GetDebugInfo(), m_Rcon);
+
+		con->SetConnectedCallback([this, con](boost::asio::yield_context& yc) {
+			con->SetConnectedCallback(nullptr);
+
+			size_t pending = --m_PendingRcons;
+			Log(LogDebug, "IcingaDB") << pending << " pending child connections remaining";
+			if (pending == 0) {
+				m_WorkQueue.Enqueue([this]() { OnConnectedHandler(); });
+			}
+		});
+
+		m_Rcons[ctype] = std::move(con);
+	}
+
+	m_PendingRcons = m_Rcons.size();
+
+	m_Rcon->SetConnectedCallback([this](boost::asio::yield_context& yc) {
+		m_Rcon->SetConnectedCallback(nullptr);
+
+		for (auto& kv : m_Rcons) {
+			kv.second->Start();
+		}
+	});
+	m_Rcon->Start();
 
 	m_StatsTimer = new Timer();
 	m_StatsTimer->SetInterval(1);
@@ -82,7 +144,7 @@ void IcingaDB::Start(bool runtimeCreated)
 	m_WorkQueue.SetName("IcingaDB");
 
 	m_Rcon->SuppressQueryKind(Prio::CheckResult);
-	m_Rcon->SuppressQueryKind(Prio::State);
+	m_Rcon->SuppressQueryKind(Prio::RuntimeStateSync);
 }
 
 void IcingaDB::ExceptionHandler(boost::exception_ptr exp)
@@ -93,22 +155,9 @@ void IcingaDB::ExceptionHandler(boost::exception_ptr exp)
 		<< "Exception during redis operation: " << DiagnosticInformation(exp);
 }
 
-void IcingaDB::ReconnectTimerHandler()
-{
-	m_WorkQueue.Enqueue([this]() { TryToReconnect(); });
-}
-
-void IcingaDB::TryToReconnect()
+void IcingaDB::OnConnectedHandler()
 {
 	AssertOnWorkQueue();
-
-	if (m_ConfigDumpDone)
-		return;
-	else
-		m_Rcon->Start();
-
-	if (!m_Rcon || !m_Rcon->IsConnected())
-		return;
 
 	if (m_ConfigDumpInProgress || m_ConfigDumpDone)
 		return;
@@ -137,18 +186,19 @@ void IcingaDB::PublishStats()
 	Dictionary::Ptr status = GetStats();
 	status->Set("config_dump_in_progress", m_ConfigDumpInProgress);
 	status->Set("timestamp", TimestampToMilliseconds(Utility::GetTime()));
+	status->Set("icingadb_environment", m_EnvironmentId);
 
-	std::vector<String> eval ({"EVAL", l_LuaPublishStats, "1", "icinga:stats"});
+	std::vector<String> query {"XADD", "icinga:stats", "MAXLEN", "1", "*"};
 
 	{
 		ObjectLock statusLock (status);
 		for (auto& kv : status) {
-			eval.emplace_back(kv.first);
-			eval.emplace_back(JsonEncode(kv.second));
+			query.emplace_back(kv.first);
+			query.emplace_back(JsonEncode(kv.second));
 		}
 	}
 
-	m_Rcon->FireAndForgetQuery(std::move(eval), Prio::Heartbeat);
+	m_Rcon->FireAndForgetQuery(std::move(query), Prio::Heartbeat);
 }
 
 void IcingaDB::Stop(bool runtimeRemoved)
@@ -159,7 +209,43 @@ void IcingaDB::Stop(bool runtimeRemoved)
 	ObjectImpl<IcingaDB>::Stop(runtimeRemoved);
 }
 
+void IcingaDB::ValidateTlsProtocolmin(const Lazy<String>& lvalue, const ValidationUtils& utils)
+{
+	ObjectImpl<IcingaDB>::ValidateTlsProtocolmin(lvalue, utils);
+
+	try {
+		ResolveTlsProtocolVersion(lvalue());
+	} catch (const std::exception& ex) {
+		BOOST_THROW_EXCEPTION(ValidationError(this, { "tls_protocolmin" }, ex.what()));
+	}
+}
+
+void IcingaDB::ValidateConnectTimeout(const Lazy<double>& lvalue, const ValidationUtils& utils)
+{
+	ObjectImpl<IcingaDB>::ValidateConnectTimeout(lvalue, utils);
+
+	if (lvalue() <= 0) {
+		BOOST_THROW_EXCEPTION(ValidationError(this, { "connect_timeout" }, "Value must be greater than 0."));
+	}
+}
+
 void IcingaDB::AssertOnWorkQueue()
 {
 	ASSERT(m_WorkQueue.IsWorkerThread());
+}
+
+void IcingaDB::DumpedGlobals::Reset()
+{
+	std::lock_guard<std::mutex> l (m_Mutex);
+	m_Ids.clear();
+}
+
+String IcingaDB::GetEnvironmentId() const {
+	return m_EnvironmentId;
+}
+
+bool IcingaDB::DumpedGlobals::IsNew(const String& id)
+{
+	std::lock_guard<std::mutex> l (m_Mutex);
+	return m_Ids.emplace(id).second;
 }

@@ -6,10 +6,11 @@
 #include "base/i2-base.hpp"
 #include "base/timer.hpp"
 #include "base/ringbuffer.hpp"
+#include "base/logger.hpp"
 #include <boost/thread/thread.hpp>
-#include <boost/thread/mutex.hpp>
-#include <boost/thread/condition_variable.hpp>
 #include <boost/exception_ptr.hpp>
+#include <condition_variable>
+#include <mutex>
 #include <queue>
 #include <deque>
 #include <atomic>
@@ -52,14 +53,14 @@ class WorkQueue
 public:
 	typedef std::function<void (boost::exception_ptr)> ExceptionCallback;
 
-	WorkQueue(size_t maxItems = 0, int threadCount = 1);
+	WorkQueue(size_t maxItems = 0, int threadCount = 1, LogSeverity statsLogLevel = LogInformation);
 	~WorkQueue();
 
 	void SetName(const String& name);
 	String GetName() const;
 
-	boost::mutex::scoped_lock AcquireLock();
-	void EnqueueUnlocked(boost::mutex::scoped_lock& lock, TaskFunction&& function, WorkQueuePriority priority = PriorityNormal);
+	std::unique_lock<std::mutex> AcquireLock();
+	void EnqueueUnlocked(std::unique_lock<std::mutex>& lock, TaskFunction&& function, WorkQueuePriority priority = PriorityNormal);
 	void Enqueue(TaskFunction&& function, WorkQueuePriority priority = PriorityNormal,
 		bool allowInterleaved = false);
 	void Join(bool stop = false);
@@ -67,17 +68,24 @@ public:
 	template<typename VectorType, typename FuncType>
 	void ParallelFor(const VectorType& items, const FuncType& func)
 	{
+		ParallelFor(items, true, func);
+	}
+
+	template<typename VectorType, typename FuncType>
+	void ParallelFor(const VectorType& items, bool preChunk, const FuncType& func)
+	{
 		using SizeType = decltype(items.size());
 
 		SizeType totalCount = items.size();
+		SizeType chunks = preChunk ? m_ThreadCount : totalCount;
 
 		auto lock = AcquireLock();
 
 		SizeType offset = 0;
 
-		for (int i = 0; i < m_ThreadCount; i++) {
-			SizeType count = totalCount / static_cast<SizeType>(m_ThreadCount);
-			if (static_cast<SizeType>(i) < totalCount % static_cast<SizeType>(m_ThreadCount))
+		for (SizeType i = 0; i < chunks; i++) {
+			SizeType count = totalCount / chunks;
+			if (i < totalCount % chunks)
 				count++;
 
 			EnqueueUnlocked(lock, [&items, func, offset, count, this]() {
@@ -115,10 +123,10 @@ private:
 	int m_ThreadCount;
 	bool m_Spawned{false};
 
-	mutable boost::mutex m_Mutex;
-	boost::condition_variable m_CVEmpty;
-	boost::condition_variable m_CVFull;
-	boost::condition_variable m_CVStarved;
+	mutable std::mutex m_Mutex;
+	std::condition_variable m_CVEmpty;
+	std::condition_variable m_CVFull;
+	std::condition_variable m_CVStarved;
 	boost::thread_group m_Threads;
 	size_t m_MaxItems;
 	bool m_Stopped{false};
@@ -129,6 +137,7 @@ private:
 	std::vector<boost::exception_ptr> m_Exceptions;
 	Timer::Ptr m_StatusTimer;
 	double m_StatusTimerTimeout;
+	LogSeverity m_StatsLogLevel;
 
 	RingBuffer m_TaskStats;
 	size_t m_PendingTasks{0};

@@ -5,6 +5,7 @@
 
 #include "base/atomic.hpp"
 #include "base/timer.hpp"
+#include "base/process.hpp"
 #include "icinga/i2-icinga.hpp"
 #include "icinga/checkable-ti.hpp"
 #include "icinga/timeperiod.hpp"
@@ -13,7 +14,9 @@
 #include "icinga/downtime.hpp"
 #include "remote/endpoint.hpp"
 #include "remote/messageorigin.hpp"
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
 
 namespace icinga
 {
@@ -39,6 +42,17 @@ enum CheckableType
 	CheckableService
 };
 
+/**
+ * @ingroup icinga
+ */
+enum FlappingStateFilter
+{
+	FlappingStateFilterOk = 1,
+	FlappingStateFilterWarning = 2,
+	FlappingStateFilterCritical = 4,
+	FlappingStateFilterUnknown = 8,
+};
+
 class CheckCommand;
 class EventCommand;
 class Dependency;
@@ -55,6 +69,7 @@ public:
 	DECLARE_OBJECTNAME(Checkable);
 
 	static void StaticInitialize();
+	static thread_local std::function<void(const Value& commandLine, const ProcessResult&)> ExecuteCommandProcessFinishedHandler;
 
 	Checkable();
 
@@ -124,7 +139,7 @@ public:
 	int GetDowntimeDepth() const final;
 
 	void RemoveAllDowntimes();
-	void TriggerDowntimes();
+	void TriggerDowntimes(double triggerTime);
 	bool IsInDowntime() const;
 	bool IsAcknowledged() const;
 
@@ -137,6 +152,7 @@ public:
 	void RemoveCommentsByType(int type, const String& removedBy = String());
 
 	std::set<Comment::Ptr> GetComments() const;
+	Comment::Ptr GetLastComment() const;
 	void RegisterComment(const Comment::Ptr& comment);
 	void UnregisterComment(const Comment::Ptr& comment);
 
@@ -171,6 +187,10 @@ public:
 	void ValidateRetryInterval(const Lazy<double>& lvalue, const ValidationUtils& value) final;
 	void ValidateMaxCheckAttempts(const Lazy<int>& lvalue, const ValidationUtils& value) final;
 
+	bool NotificationReasonApplies(NotificationType type);
+	bool NotificationReasonSuppressed(NotificationType type);
+	bool IsLikelyToBeCheckedSoon();
+
 	static void IncreasePendingChecks();
 	static void DecreasePendingChecks();
 	static int GetPendingChecks();
@@ -180,20 +200,21 @@ public:
 
 protected:
 	void Start(bool runtimeCreated) override;
+	void OnConfigLoaded() override;
 	void OnAllConfigLoaded() override;
 
 private:
-	mutable boost::mutex m_CheckableMutex;
+	mutable std::mutex m_CheckableMutex;
 	bool m_CheckRunning{false};
 	long m_SchedulingOffset;
 
-	static boost::mutex m_StatsMutex;
+	static std::mutex m_StatsMutex;
 	static int m_PendingChecks;
-	static boost::condition_variable m_PendingChecksCV;
+	static std::condition_variable m_PendingChecksCV;
 
 	/* Downtimes */
 	std::set<Downtime::Ptr> m_Downtimes;
-	mutable boost::mutex m_DowntimeMutex;
+	mutable std::mutex m_DowntimeMutex;
 
 	static void NotifyFixedDowntimeStart(const Downtime::Ptr& downtime);
 	static void NotifyFlexibleDowntimeStart(const Downtime::Ptr& downtime);
@@ -202,24 +223,28 @@ private:
 	static void NotifyDowntimeEnd(const Downtime::Ptr& downtime);
 
 	static void FireSuppressedNotifications(const Timer * const&);
+	static void CleanDeadlinedExecutions(const Timer * const&);
 
 	/* Comments */
 	std::set<Comment::Ptr> m_Comments;
-	mutable boost::mutex m_CommentMutex;
+	mutable std::mutex m_CommentMutex;
 
 	/* Notifications */
 	std::set<Notification::Ptr> m_Notifications;
-	mutable boost::mutex m_NotificationMutex;
+	mutable std::mutex m_NotificationMutex;
 
 	/* Dependencies */
-	mutable boost::mutex m_DependencyMutex;
+	mutable std::mutex m_DependencyMutex;
 	std::set<intrusive_ptr<Dependency> > m_Dependencies;
 	std::set<intrusive_ptr<Dependency> > m_ReverseDependencies;
 
 	void GetAllChildrenInternal(std::set<Checkable::Ptr>& children, int level = 0) const;
 
 	/* Flapping */
-	void UpdateFlappingStatus(bool stateChange);
+	static const std::map<String, int> m_FlappingStateFilterMap;
+
+	void UpdateFlappingStatus(ServiceState newState);
+	static int ServiceStateToFlappingFilter(ServiceState state);
 };
 
 }

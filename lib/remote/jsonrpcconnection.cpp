@@ -60,17 +60,17 @@ void JsonRpcConnection::Start()
 
 void JsonRpcConnection::HandleIncomingMessages(boost::asio::yield_context yc)
 {
+	m_Stream->next_layer().SetSeen(&m_Seen);
+
 	for (;;) {
 		String message;
 
 		try {
 			message = JsonRpc::ReadMessage(m_Stream, yc, m_Endpoint ? -1 : 1024 * 1024);
 		} catch (const std::exception& ex) {
-			if (!m_ShuttingDown) {
-				Log(LogNotice, "JsonRpcConnection")
-					<< "Error while reading JSON-RPC message for identity '" << m_Identity
-					<< "': " << DiagnosticInformation(ex);
-			}
+			Log(m_ShuttingDown ? LogDebug : LogNotice, "JsonRpcConnection")
+				<< "Error while reading JSON-RPC message for identity '" << m_Identity
+				<< "': " << DiagnosticInformation(ex);
 
 			break;
 		}
@@ -82,11 +82,9 @@ void JsonRpcConnection::HandleIncomingMessages(boost::asio::yield_context yc)
 
 			MessageHandler(message);
 		} catch (const std::exception& ex) {
-			if (!m_ShuttingDown) {
-				Log(LogWarning, "JsonRpcConnection")
-					<< "Error while processing JSON-RPC message for identity '" << m_Identity
-					<< "': " << DiagnosticInformation(ex);
-			}
+			Log(m_ShuttingDown ? LogDebug : LogWarning, "JsonRpcConnection")
+				<< "Error while processing JSON-RPC message for identity '" << m_Identity
+				<< "': " << DiagnosticInformation(ex);
 
 			break;
 		}
@@ -123,12 +121,9 @@ void JsonRpcConnection::WriteOutgoingMessages(boost::asio::yield_context yc)
 
 				m_Stream->async_flush(yc);
 			} catch (const std::exception& ex) {
-				if (!m_ShuttingDown) {
-					std::ostringstream info;
-					info << "Error while sending JSON-RPC message for identity '" << m_Identity << "'";
-					Log(LogWarning, "JsonRpcConnection")
-						<< info.str() << "\n" << DiagnosticInformation(ex);
-				}
+				Log(m_ShuttingDown ? LogDebug : LogWarning, "JsonRpcConnection")
+					<< "Error while sending JSON-RPC message for identity '"
+					<< m_Identity << "'\n" << DiagnosticInformation(ex);
 
 				break;
 			}
@@ -233,7 +228,19 @@ void JsonRpcConnection::Disconnect()
 
 			m_Stream->lowest_layer().cancel(ec);
 
+			Timeout::Ptr shutdownTimeout (new Timeout(
+				m_IoStrand.context(),
+				m_IoStrand,
+				boost::posix_time::seconds(10),
+				[this, keepAlive](asio::yield_context yc) {
+					boost::system::error_code ec;
+					m_Stream->lowest_layer().cancel(ec);
+				}
+			));
+
 			m_Stream->next_layer().async_shutdown(yc[ec]);
+
+			shutdownTimeout->Cancel();
 
 			m_Stream->lowest_layer().shutdown(m_Stream->lowest_layer().shutdown_both, ec);
 		}
@@ -334,20 +341,43 @@ void JsonRpcConnection::CheckLiveness(boost::asio::yield_context yc)
 {
 	boost::system::error_code ec;
 
-	for (;;) {
-		m_CheckLivenessTimer.expires_from_now(boost::posix_time::seconds(30));
+	if (!m_Authenticated) {
+		/* Anonymous connections are normally only used for requesting a certificate and are closed after this request
+		 * is received. However, the request is only sent if the child has successfully verified the certificate of its
+		 * parent so that it is an authenticated connection from its perspective. In case this verification fails, both
+		 * ends view it as an anonymous connection and never actually use it but attempt a reconnect after 10 seconds
+		 * leaking the connection. Therefore close it after a timeout.
+		 */
+
+		m_CheckLivenessTimer.expires_from_now(boost::posix_time::seconds(10));
 		m_CheckLivenessTimer.async_wait(yc[ec]);
 
 		if (m_ShuttingDown) {
-			break;
+			return;
 		}
 
-		if (m_Seen < Utility::GetTime() - 60 && (!m_Endpoint || !m_Endpoint->GetSyncing())) {
-			Log(LogInformation, "JsonRpcConnection")
-				<<  "No messages for identity '" << m_Identity << "' have been received in the last 60 seconds.";
+		auto remote (m_Stream->lowest_layer().remote_endpoint());
 
-			Disconnect();
-			break;
+		Log(LogInformation, "JsonRpcConnection")
+			<< "Closing anonymous connection [" << remote.address() << "]:" << remote.port() << " after 10 seconds.";
+
+		Disconnect();
+	} else {
+		for (;;) {
+			m_CheckLivenessTimer.expires_from_now(boost::posix_time::seconds(30));
+			m_CheckLivenessTimer.async_wait(yc[ec]);
+
+			if (m_ShuttingDown) {
+				break;
+			}
+
+			if (m_Seen < Utility::GetTime() - 60 && (!m_Endpoint || !m_Endpoint->GetSyncing())) {
+				Log(LogInformation, "JsonRpcConnection")
+					<<  "No messages for identity '" << m_Identity << "' have been received in the last 60 seconds.";
+
+				Disconnect();
+				break;
+			}
 		}
 	}
 }

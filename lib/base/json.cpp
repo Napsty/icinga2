@@ -166,16 +166,18 @@ void Encode(JsonEncoder<prettyPrint>& stateMachine, const Value& value)
 					}
 				}
 
-				Array::Ptr arr = dynamic_pointer_cast<Array>(obj);
-				if (arr) {
-					EncodeArray(stateMachine, arr);
-					break;
+				{
+					Array::Ptr arr = dynamic_pointer_cast<Array>(obj);
+					if (arr) {
+						EncodeArray(stateMachine, arr);
+						break;
+					}
 				}
+
+				// obj is most likely a function => "Object of type 'Function'"
+				Encode(stateMachine, obj->ToString());
+				break;
 			}
-
-			stateMachine.Null();
-
-			break;
 
 		case ValueEmpty:
 			stateMachine.Null();
@@ -193,7 +195,7 @@ String icinga::JsonEncode(const Value& value, bool pretty_print)
 
 		Encode(stateMachine, value);
 
-		return stateMachine.GetResult();
+		return stateMachine.GetResult() + "\n";
 	} else {
 		JsonEncoder<false> stateMachine;
 
@@ -365,7 +367,25 @@ inline
 void JsonEncoder<prettyPrint>::NumberFloat(double value)
 {
 	BeforeItem();
-	AppendJson(value);
+
+	// Make sure 0.0 is serialized as 0, so e.g. Icinga DB can parse it as int.
+	if (value < 0) {
+		long long i = value;
+
+		if (i == value) {
+			AppendJson(i);
+		} else {
+			AppendJson(value);
+		}
+	} else {
+		unsigned long long i = value;
+
+		if (i == value) {
+			AppendJson(i);
+		} else {
+			AppendJson(value);
+		}
+	}
 }
 
 template<bool prettyPrint>

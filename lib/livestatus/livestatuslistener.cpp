@@ -22,7 +22,7 @@ REGISTER_TYPE(LivestatusListener);
 
 static int l_ClientsConnected = 0;
 static int l_Connections = 0;
-static boost::mutex l_ComponentMutex;
+static std::mutex l_ComponentMutex;
 
 REGISTER_STATSFUNCTION(LivestatusListener, &LivestatusListener::StatsFunc);
 
@@ -64,7 +64,7 @@ void LivestatusListener::Start(bool runtimeCreated)
 
 		m_Listener = socket;
 
-		m_Thread = std::thread(std::bind(&LivestatusListener::ServerThreadProc, this));
+		m_Thread = std::thread([this]() { ServerThreadProc(); });
 
 		Log(LogInformation, "LivestatusListener")
 			<< "Created TCP socket listening on host '" << GetBindHost() << "' port '" << GetBindPort() << "'.";
@@ -92,7 +92,7 @@ void LivestatusListener::Start(bool runtimeCreated)
 
 		m_Listener = socket;
 
-		m_Thread = std::thread(std::bind(&LivestatusListener::ServerThreadProc, this));
+		m_Thread = std::thread([this]() { ServerThreadProc(); });
 
 		Log(LogInformation, "LivestatusListener")
 			<< "Created UNIX socket in '" << GetSocketPath() << "'.";
@@ -119,14 +119,14 @@ void LivestatusListener::Stop(bool runtimeRemoved)
 
 int LivestatusListener::GetClientsConnected()
 {
-	boost::mutex::scoped_lock lock(l_ComponentMutex);
+	std::unique_lock<std::mutex> lock(l_ComponentMutex);
 
 	return l_ClientsConnected;
 }
 
 int LivestatusListener::GetConnections()
 {
-	boost::mutex::scoped_lock lock(l_ComponentMutex);
+	std::unique_lock<std::mutex> lock(l_ComponentMutex);
 
 	return l_Connections;
 }
@@ -142,7 +142,7 @@ void LivestatusListener::ServerThreadProc()
 			if (m_Listener->Poll(true, false, &tv)) {
 				Socket::Ptr client = m_Listener->Accept();
 				Log(LogNotice, "LivestatusListener", "Client connected");
-				Utility::QueueAsyncCallback(std::bind(&LivestatusListener::ClientHandler, this, client), LowLatencyScheduler);
+				Utility::QueueAsyncCallback([this, client]() { ClientHandler(client); }, LowLatencyScheduler);
 			}
 
 			if (!IsActive())
@@ -158,7 +158,7 @@ void LivestatusListener::ServerThreadProc()
 void LivestatusListener::ClientHandler(const Socket::Ptr& client)
 {
 	{
-		boost::mutex::scoped_lock lock(l_ComponentMutex);
+		std::unique_lock<std::mutex> lock(l_ComponentMutex);
 		l_ClientsConnected++;
 		l_Connections++;
 	}
@@ -196,7 +196,7 @@ void LivestatusListener::ClientHandler(const Socket::Ptr& client)
 	}
 
 	{
-		boost::mutex::scoped_lock lock(l_ComponentMutex);
+		std::unique_lock<std::mutex> lock(l_ComponentMutex);
 		l_ClientsConnected--;
 	}
 }

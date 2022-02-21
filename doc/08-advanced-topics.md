@@ -261,7 +261,7 @@ If you want to specify a notification period across midnight,
 you can define it the following way:
 
 ```
-object Timeperiod "across-midnight" {
+object TimePeriod "across-midnight" {
   display_name = "Nightly Notification"
   ranges = {
     "saturday" = "22:00-24:00"
@@ -275,7 +275,7 @@ the first day as start with an overlapping range into
 the next day:
 
 ```
-object Timeperiod "do-not-disturb" {
+object TimePeriod "do-not-disturb" {
   display_name = "Weekend DND"
   ranges = {
     "saturday" = "22:00-06:00"
@@ -290,7 +290,7 @@ days, weeks or months. This can be useful when taking components offline
 for a distinct period of time.
 
 ```
-object Timeperiod "standby" {
+object TimePeriod "standby" {
   display_name = "Standby"
   ranges = {
     "2016-09-30 - 2016-10-30" = "00:00-24:00"
@@ -375,6 +375,19 @@ object TimePeriod "prod-notification" {
   }
 }
 ```
+
+### Time zone handling <a id="timeperiods-timezones"></a>
+
+Icinga 2 takes the OS' time zone including DST changes into account.
+
+Times inside DST changes are interpreted as before the DST changes.
+I.e. for the time zone Europe/Berlin:
+
+* On 2020-10-25 03:00 CEST the time jumps back to 02:00 CET.
+  For Icinga 02:30 means 02:30 CEST.
+* On 2021-02-28 02:00 CET the time jumps forward to 03:00 CEST.
+  For Icinga (the actually not existing) 02:30 refers to CET
+  and effectively means 03:30 CEST.
 
 ## External Passive Check Results <a id="external-check-results"></a>
 
@@ -467,6 +480,8 @@ when a [host](09-object-types.md#objecttype-host) or [service](09-object-types.m
 
 The default thresholds are 30% for high and 25% for low. If the computed flapping value exceeds the high threshold a
 host or service is considered flapping until it drops below the low flapping threshold.
+
+The attribute `flapping_ignore_states` allows to ignore state changes to specified states during the flapping calculation.
 
 `FlappingStart` and `FlappingEnd` notifications will be sent out accordingly, if configured. See the chapter on
 [notifications](alert-notifications) for details
@@ -975,7 +990,7 @@ The more programmatic approach for `set_if` could look like this:
           if (typeof(srv_vars.compellent) == Dictionary) {
             return srv_vars.compellent.contains("disks")
           } else {
-            log(LogInformationen, "checkcommand set_if", "custom variable compellent_checks is not a dictionary, ignoring it.")
+            log(LogInformation, "checkcommand set_if", "custom variable compellent_checks is not a dictionary, ignoring it.")
             return false
           }
         } else {
@@ -1165,6 +1180,7 @@ to represent its internal state. The following types are exposed via the [API](1
   output                    | String                | The check output.
   performance\_data         | Array                 | Array of [performance data values](08-advanced-topics.md#advanced-value-types-perfdatavalue).
   check\_source             | String                | Name of the node executing the check.
+  scheduling\_source        | String                | Name of the node scheduling the check.
   state                     | Number                | The current state (0 = OK, 1 = WARNING, 2 = CRITICAL, 3 = UNKNOWN).
   command                   | Value                 | Array of command with shell-escaped arguments or command line string.
   execution\_start          | Timestamp             | Check execution start time (as a UNIX timestamp).

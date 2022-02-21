@@ -7,6 +7,7 @@
 #include "base/timer.hpp"
 #include "base/utility.hpp"
 #include "base/logger.hpp"
+#include <utility>
 
 using namespace icinga;
 
@@ -38,18 +39,32 @@ void Checkable::RemoveCommentsByType(int type, const String& removedBy)
 
 std::set<Comment::Ptr> Checkable::GetComments() const
 {
-	boost::mutex::scoped_lock lock(m_CommentMutex);
+	std::unique_lock<std::mutex> lock(m_CommentMutex);
 	return m_Comments;
+}
+
+Comment::Ptr Checkable::GetLastComment() const
+{
+	std::unique_lock<std::mutex> lock (m_CommentMutex);
+	Comment::Ptr lastComment;
+
+	for (auto& comment : m_Comments) {
+		if (!lastComment || comment->GetEntryTime() > lastComment->GetEntryTime()) {
+			lastComment = comment;
+		}
+	}
+
+	return std::move(lastComment);
 }
 
 void Checkable::RegisterComment(const Comment::Ptr& comment)
 {
-	boost::mutex::scoped_lock lock(m_CommentMutex);
+	std::unique_lock<std::mutex> lock(m_CommentMutex);
 	m_Comments.insert(comment);
 }
 
 void Checkable::UnregisterComment(const Comment::Ptr& comment)
 {
-	boost::mutex::scoped_lock lock(m_CommentMutex);
+	std::unique_lock<std::mutex> lock(m_CommentMutex);
 	m_Comments.erase(comment);
 }

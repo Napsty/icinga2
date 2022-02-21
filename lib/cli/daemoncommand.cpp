@@ -11,6 +11,7 @@
 #include "base/defer.hpp"
 #include "base/logger.hpp"
 #include "base/application.hpp"
+#include "base/process.hpp"
 #include "base/timer.hpp"
 #include "base/utility.hpp"
 #include "base/exception.hpp"
@@ -43,6 +44,14 @@ namespace po = boost::program_options;
 static po::variables_map g_AppParams;
 
 REGISTER_CLICOMMAND("daemon", DaemonCommand);
+
+static inline
+void NotifyStatus(const char* status)
+{
+#ifdef HAVE_SYSTEMD
+	(void)sd_notifyf(0, "STATUS=%s", status);
+#endif /* HAVE_SYSTEMD */
+}
 
 /*
  * Daemonize().  On error, this function logs by itself and exits (i.e. does not return).
@@ -234,12 +243,14 @@ int RunWorker(const std::vector<std::string>& configs, bool closeConsoleLog = fa
 #endif /* I2_DEBUG */
 
 	Log(LogInformation, "cli", "Loading configuration file(s).");
+	NotifyStatus("Loading configuration file(s)...");
 
 	{
 		std::vector<ConfigItem::Ptr> newItems;
 
 		if (!DaemonUtility::LoadConfigFiles(configs, newItems, Configuration::ObjectsPath, Configuration::VarsPath)) {
 			Log(LogCritical, "cli", "Config validation failed. Re-run with 'icinga2 daemon -C' after fixing the config.");
+			NotifyStatus("Config validation failed.");
 			return EXIT_FAILURE;
 		}
 
@@ -251,6 +262,8 @@ int RunWorker(const std::vector<std::string>& configs, bool closeConsoleLog = fa
 
 		Log(LogNotice, "cli")
 			<< "Waiting for the umbrella process to let us doing the actual work";
+
+		NotifyStatus("Waiting for the umbrella process to let us doing the actual work...");
 
 		if (closeConsoleLog) {
 			CloseStdIO(stderrFile);
@@ -265,21 +278,28 @@ int RunWorker(const std::vector<std::string>& configs, bool closeConsoleLog = fa
 			<< "The umbrella process let us continuing";
 #endif /* _WIN32 */
 
+		NotifyStatus("Restoring the previous program state...");
+
 		/* restore the previous program state */
 		try {
 			ConfigObject::RestoreObjects(Configuration::StatePath);
 		} catch (const std::exception& ex) {
 			Log(LogCritical, "cli")
 				<< "Failed to restore state file: " << DiagnosticInformation(ex);
+
+			NotifyStatus("Failed to restore state file.");
+
 			return EXIT_FAILURE;
 		}
 
-		WorkQueue upq(25000, Configuration::Concurrency);
-		upq.SetName("DaemonCommand::Run");
+		NotifyStatus("Activating config objects...");
 
 		// activate config only after daemonization: it starts threads and that is not compatible with fork()
-		if (!ConfigItem::ActivateItems(upq, newItems, false, false, true)) {
+		if (!ConfigItem::ActivateItems(newItems, false, true, true)) {
 			Log(LogCritical, "cli", "Error activating configuration.");
+
+			NotifyStatus("Error activating configuration.");
+
 			return EXIT_FAILURE;
 		}
 	}
@@ -298,12 +318,14 @@ int RunWorker(const std::vector<std::string>& configs, bool closeConsoleLog = fa
 
 	ApiListener::UpdateObjectAuthority();
 
+	NotifyStatus("Startup finished.");
+
 	return Application::GetInstance()->Run();
 }
 
 #ifndef _WIN32
 /**
- * The possible states of a seemless worker being started by StartUnixWorker().
+ * The possible states of a seamless worker being started by StartUnixWorker().
  */
 enum class UnixWorkerState : uint_fast8_t
 {
@@ -327,10 +349,10 @@ static const sigset_t l_UnixWorkerSignals = ([]() -> sigset_t {
 	return s;
 })();
 
-// The PID of the seemless worker currently being started by StartUnixWorker()
+// The PID of the seamless worker currently being started by StartUnixWorker()
 static Atomic<pid_t> l_CurrentlyStartingUnixWorkerPid (-1);
 
-// The state of the seemless worker currently being started by StartUnixWorker()
+// The state of the seamless worker currently being started by StartUnixWorker()
 static Atomic<UnixWorkerState> l_CurrentlyStartingUnixWorkerState (UnixWorkerState::Pending);
 
 // The last temination signal we received
@@ -355,14 +377,14 @@ static void UmbrellaSignalHandler(int num, siginfo_t *info, void*)
 		case SIGUSR2:
 			if (l_CurrentlyStartingUnixWorkerState.load() == UnixWorkerState::Pending
 				&& (info->si_pid == 0 || info->si_pid == l_CurrentlyStartingUnixWorkerPid.load()) ) {
-				// The seemless worker currently being started by StartUnixWorker() successfully loaded its config
+				// The seamless worker currently being started by StartUnixWorker() successfully loaded its config
 				l_CurrentlyStartingUnixWorkerState.store(UnixWorkerState::LoadedConfig);
 			}
 			break;
 		case SIGCHLD:
 			if (l_CurrentlyStartingUnixWorkerState.load() == UnixWorkerState::Pending
 				&& (info->si_pid == 0 || info->si_pid == l_CurrentlyStartingUnixWorkerPid.load()) ) {
-				// The seemless worker currently being started by StartUnixWorker() failed
+				// The seamless worker currently being started by StartUnixWorker() failed
 				l_CurrentlyStartingUnixWorkerState.store(UnixWorkerState::Failed);
 			}
 			break;
@@ -392,11 +414,15 @@ static void UmbrellaSignalHandler(int num, siginfo_t *info, void*)
 }
 
 /**
- * Seemless worker's signal handlers
+ * Seamless worker's signal handlers
  */
 static void WorkerSignalHandler(int num, siginfo_t *info, void*)
 {
 	switch (num) {
+		case SIGUSR1:
+			// Catches SIGUSR1 as long as the actual handler (logrotate)
+			// has not been installed not to let SIGUSR1 terminate the process
+			break;
 		case SIGUSR2:
 			if (info->si_pid == 0 || info->si_pid == l_UmbrellaPid) {
 				// The umbrella process allowed us to continue working beyond config validation
@@ -435,18 +461,18 @@ static void NotifyWatchdog()
 #endif /* HAVE_SYSTEMD */
 
 /**
- * Starts seemless worker process doing the actual work (config loading, ...)
+ * Starts seamless worker process doing the actual work (config loading, ...)
  *
  * @param configs Files to read config from
  * @param closeConsoleLog Whether to close the console log after config loading
  * @param stderrFile Where to log errors
  *
- * @return The worker's PID on success, -1 on failure (if the worker couldn't load its config)
+ * @return The worker's PID on success, -1 on fork(2) failure, -2 if the worker couldn't load its config
  */
 static pid_t StartUnixWorker(const std::vector<std::string>& configs, bool closeConsoleLog = false, const String& stderrFile = String())
 {
 	Log(LogNotice, "cli")
-		<< "Spawning seemless worker process doing the actual work";
+		<< "Spawning seamless worker process doing the actual work";
 
 	try {
 		Application::UninitializeBase();
@@ -467,7 +493,17 @@ static pid_t StartUnixWorker(const std::vector<std::string>& configs, bool close
 		case -1:
 			Log(LogCritical, "cli")
 				<< "fork() failed with error code " << errno << ", \"" << Utility::FormatErrorNumber(errno) << "\"";
-			exit(EXIT_FAILURE);
+
+			try {
+				Application::InitializeBase();
+			} catch (const std::exception& ex) {
+				Log(LogCritical, "cli")
+					<< "Failed to re-initialize thread pool after forking (parent): " << DiagnosticInformation(ex);
+				exit(EXIT_FAILURE);
+			}
+
+			(void)sigprocmask(SIG_UNBLOCK, &l_UnixWorkerSignals, nullptr);
+			return -1;
 
 		case 0:
 			try {
@@ -489,6 +525,7 @@ static pid_t StartUnixWorker(const std::vector<std::string>& configs, bool close
 					sa.sa_sigaction = &WorkerSignalHandler;
 					sa.sa_flags = SA_RESTART | SA_SIGINFO;
 
+					(void)sigaction(SIGUSR1, &sa, nullptr);
 					(void)sigaction(SIGUSR2, &sa, nullptr);
 					(void)sigaction(SIGINT, &sa, nullptr);
 					(void)sigaction(SIGTERM, &sa, nullptr);
@@ -504,7 +541,18 @@ static pid_t StartUnixWorker(const std::vector<std::string>& configs, bool close
 					_exit(EXIT_FAILURE);
 				}
 
+				try {
+					Process::InitializeSpawnHelper();
+				} catch (const std::exception& ex) {
+					Log(LogCritical, "cli")
+						<< "Failed to initialize process spawn helper after forking (child): " << DiagnosticInformation(ex);
+					_exit(EXIT_FAILURE);
+				}
+
 				_exit(RunWorker(configs, closeConsoleLog, stderrFile));
+			} catch (const std::exception& ex) {
+				Log(LogCritical, "cli") << "Exception in main process: " << DiagnosticInformation(ex);
+				_exit(EXIT_FAILURE);
 			} catch (...) {
 				_exit(EXIT_FAILURE);
 			}
@@ -536,7 +584,7 @@ static pid_t StartUnixWorker(const std::vector<std::string>& configs, bool close
 							NotifyWatchdog();
 #endif /* HAVE_SYSTEMD */
 						}
-						pid = -1;
+						pid = -2;
 						break;
 					default:
 						Utility::Sleep(0.2);
@@ -667,7 +715,14 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 	}
 
 #ifdef _WIN32
-	return RunWorker(configs);
+	try {
+		return RunWorker(configs);
+	} catch (const std::exception& ex) {
+		Log(LogCritical, "cli")	<< "Exception in main process: " << DiagnosticInformation(ex);
+		return EXIT_FAILURE;
+	} catch (...) {
+		return EXIT_FAILURE;
+	}
 #else /* _WIN32 */
 	l_UmbrellaPid = getpid();
 	Application::SetUmbrellaProcess(l_UmbrellaPid);
@@ -693,10 +748,10 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 	if (vm.count("errorlog"))
 		errorLog = vm["errorlog"].as<std::string>();
 
-	// The PID of the current seemless worker
+	// The PID of the current seamless worker
 	pid_t currentWorker = StartUnixWorker(configs, closeConsoleLog, errorLog);
 
-	if (currentWorker == -1) {
+	if (currentWorker < 0) {
 		return EXIT_FAILURE;
 	}
 
@@ -716,7 +771,7 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 	sd_notify(0, "READY=1");
 #endif /* HAVE_SYSTEMD */
 
-	// Whether we already forwarded a termination signal to the seemless worker
+	// Whether we already forwarded a termination signal to the seamless worker
 	bool requestedTermination = false;
 
 	// Whether we already notified systemd about our termination
@@ -731,7 +786,7 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 			int termSig = l_TermSignal.load();
 			if (termSig != -1) {
 				Log(LogNotice, "cli")
-					<< "Got signal " << termSig << ", forwarding to seemless worker (PID " << currentWorker << ")";
+					<< "Got signal " << termSig << ", forwarding to seamless worker (PID " << currentWorker << ")";
 
 				(void)kill(currentWorker, termSig);
 				requestedTermination = true;
@@ -755,31 +810,39 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 
 			pid_t nextWorker = StartUnixWorker(configs);
 
-			if (nextWorker == -1) {
-				Log(LogCritical, "Application", "Found error in config: reloading aborted");
-			} else {
-				Log(LogInformation, "Application")
-					<< "Reload done, old process shutting down. Child process with PID '" << nextWorker << "' is taking over.";
+			switch (nextWorker) {
+				case -1:
+					break;
+				case -2:
+					Log(LogCritical, "Application", "Found error in config: reloading aborted");
+					break;
+				default:
+					Log(LogInformation, "Application")
+						<< "Reload done, old process shutting down. Child process with PID '" << nextWorker << "' is taking over.";
 
-				(void)kill(currentWorker, SIGTERM);
+					NotifyStatus("Shutting down old instance...");
 
-				{
-					double start = Utility::GetTime();
+					(void)kill(currentWorker, SIGTERM);
 
-					while (waitpid(currentWorker, nullptr, 0) == -1 && errno == EINTR) {
-#ifdef HAVE_SYSTEMD
-						NotifyWatchdog();
-#endif /* HAVE_SYSTEMD */
+					{
+						double start = Utility::GetTime();
+
+						while (waitpid(currentWorker, nullptr, 0) == -1 && errno == EINTR) {
+	#ifdef HAVE_SYSTEMD
+							NotifyWatchdog();
+	#endif /* HAVE_SYSTEMD */
+						}
+
+						Log(LogNotice, "cli")
+							<< "Waited for " << Utility::FormatDuration(Utility::GetTime() - start) << " on old process to exit.";
 					}
 
-					Log(LogNotice, "cli")
-						<< "Waited for " << Utility::FormatDuration(Utility::GetTime() - start) << " on old process to exit.";
-				}
+					// Old instance shut down, allow the new one to continue working beyond config validation
+					(void)kill(nextWorker, SIGUSR2);
 
-				// Old instance shut down, allow the new one to continue working beyond config validation
-				(void)kill(nextWorker, SIGUSR2);
+					NotifyStatus("Shut down old instance.");
 
-				currentWorker = nextWorker;
+					currentWorker = nextWorker;
 			}
 
 #ifdef HAVE_SYSTEMD
@@ -790,7 +853,7 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 
 		if (l_RequestedReopenLogs.exchange(false)) {
 			Log(LogNotice, "cli")
-				<< "Got signal " << SIGUSR1 << ", forwarding to seemless worker (PID " << currentWorker << ")";
+				<< "Got signal " << SIGUSR1 << ", forwarding to seamless worker (PID " << currentWorker << ")";
 
 			(void)kill(currentWorker, SIGUSR1);
 		}
@@ -799,7 +862,7 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 			int status;
 			if (waitpid(currentWorker, &status, WNOHANG) > 0) {
 				Log(LogNotice, "cli")
-					<< "Seemless worker (PID " << currentWorker << ") stopped, stopping as well";
+					<< "Seamless worker (PID " << currentWorker << ") stopped, stopping as well";
 
 #ifdef HAVE_SYSTEMD
 				if (!notifiedTermination) {
@@ -808,7 +871,7 @@ int DaemonCommand::Run(const po::variables_map& vm, const std::vector<std::strin
 				}
 #endif /* HAVE_SYSTEMD */
 
-				// If killed by signal, forward it via the exit code (to be as seemless as possible)
+				// If killed by signal, forward it via the exit code (to be as seamless as possible)
 				return WIFSIGNALED(status) ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
 			}
 		}

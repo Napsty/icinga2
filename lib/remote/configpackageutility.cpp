@@ -8,6 +8,7 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/regex.hpp>
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 
 using namespace icinga;
@@ -57,20 +58,15 @@ std::vector<String> ConfigPackageUtility::GetPackages()
 	if (!Utility::PathExists(packageDir))
 		return packages;
 
-	Utility::Glob(packageDir + "/*", std::bind(&ConfigPackageUtility::CollectDirNames,
-		_1, std::ref(packages)), GlobDirectory);
+	Utility::Glob(packageDir + "/*", [&packages](const String& path) { packages.emplace_back(Utility::BaseName(path)); }, GlobDirectory);
 
 	return packages;
 }
 
-void ConfigPackageUtility::CollectDirNames(const String& path, std::vector<String>& dirs)
-{
-	dirs.emplace_back(Utility::BaseName(path));
-}
-
 bool ConfigPackageUtility::PackageExists(const String& name)
 {
-	return Utility::PathExists(GetPackageDir() + "/" + name);
+	auto packages (GetPackages());
+	return std::find(packages.begin(), packages.end(), name) != packages.end();
 }
 
 String ConfigPackageUtility::CreateStage(const String& packageName, const Dictionary::Ptr& files)
@@ -187,7 +183,7 @@ void ConfigPackageUtility::TryActivateStageCallback(const ProcessResult& pr, con
 	if (pr.ExitStatus == 0) {
 		if (activate) {
 			{
-				boost::mutex::scoped_lock lock(GetStaticPackageMutex());
+				std::unique_lock<std::mutex> lock(GetStaticPackageMutex());
 
 				ActivateStage(packageName, stageName);
 			}
@@ -228,7 +224,7 @@ void ConfigPackageUtility::AsyncTryActivateStage(const String& packageName, cons
 
 	Process::Ptr process = new Process(Process::PrepareCommand(args));
 	process->SetTimeout(Application::GetReloadTimeout());
-	process->Run(std::bind(&TryActivateStageCallback, _1, packageName, stageName, activate, reload));
+	process->Run([packageName, stageName, activate, reload](const ProcessResult& pr) { TryActivateStageCallback(pr, packageName, stageName, activate, reload); });
 }
 
 void ConfigPackageUtility::DeleteStage(const String& packageName, const String& stageName)
@@ -247,14 +243,14 @@ void ConfigPackageUtility::DeleteStage(const String& packageName, const String& 
 std::vector<String> ConfigPackageUtility::GetStages(const String& packageName)
 {
 	std::vector<String> stages;
-	Utility::Glob(GetPackageDir() + "/" + packageName + "/*", std::bind(&ConfigPackageUtility::CollectDirNames, _1, std::ref(stages)), GlobDirectory);
+	Utility::Glob(GetPackageDir() + "/" + packageName + "/*", [&stages](const String& path) { stages.emplace_back(Utility::BaseName(path)); }, GlobDirectory);
 	return stages;
 }
 
 String ConfigPackageUtility::GetActiveStageFromFile(const String& packageName)
 {
 	/* Lock the transaction, reading this only happens on startup or when something really is broken. */
-	boost::mutex::scoped_lock lock(GetStaticActiveStageMutex());
+	std::unique_lock<std::mutex> lock(GetStaticActiveStageMutex());
 
 	String path = GetPackageDir() + "/" + packageName + "/active-stage";
 
@@ -274,7 +270,7 @@ String ConfigPackageUtility::GetActiveStageFromFile(const String& packageName)
 
 void ConfigPackageUtility::SetActiveStageToFile(const String& packageName, const String& stageName)
 {
-	boost::mutex::scoped_lock lock(GetStaticActiveStageMutex());
+	std::unique_lock<std::mutex> lock(GetStaticActiveStageMutex());
 
 	String activeStagePath = GetPackageDir() + "/" + packageName + "/active-stage";
 
@@ -328,7 +324,9 @@ void ConfigPackageUtility::SetActiveStage(const String& packageName, const Strin
 std::vector<std::pair<String, bool> > ConfigPackageUtility::GetFiles(const String& packageName, const String& stageName)
 {
 	std::vector<std::pair<String, bool> > paths;
-	Utility::GlobRecursive(GetPackageDir() + "/" + packageName + "/" + stageName, "*", std::bind(&ConfigPackageUtility::CollectPaths, _1, std::ref(paths)), GlobDirectory | GlobFile);
+	Utility::GlobRecursive(GetPackageDir() + "/" + packageName + "/" + stageName, "*", [&paths](const String& path) {
+		CollectPaths(path, paths);
+	}, GlobDirectory | GlobFile);
 
 	return paths;
 }
@@ -370,7 +368,12 @@ bool ConfigPackageUtility::ContainsDotDot(const String& path)
 	return false;
 }
 
-bool ConfigPackageUtility::ValidateName(const String& name)
+bool ConfigPackageUtility::ValidatePackageName(const String& packageName)
+{
+	return ValidateFreshName(packageName) || PackageExists(packageName);
+}
+
+bool ConfigPackageUtility::ValidateFreshName(const String& name)
 {
 	if (name.IsEmpty())
 		return false;
@@ -379,19 +382,19 @@ bool ConfigPackageUtility::ValidateName(const String& name)
 	if (ContainsDotDot(name))
 		return false;
 
-	boost::regex expr("^[^a-zA-Z0-9_\\-]*$", boost::regex::icase);
-	boost::smatch what;
-	return (!boost::regex_search(name.GetData(), what, expr));
+	return std::all_of(name.Begin(), name.End(), [](char c) {
+		return std::isalnum(c, std::locale::classic()) || c == '_' || c == '-';
+	});
 }
 
-boost::mutex& ConfigPackageUtility::GetStaticPackageMutex()
+std::mutex& ConfigPackageUtility::GetStaticPackageMutex()
 {
-	static boost::mutex mutex;
+	static std::mutex mutex;
 	return mutex;
 }
 
-boost::mutex& ConfigPackageUtility::GetStaticActiveStageMutex()
+std::mutex& ConfigPackageUtility::GetStaticActiveStageMutex()
 {
-	static boost::mutex mutex;
+	static std::mutex mutex;
 	return mutex;
 }

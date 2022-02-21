@@ -89,7 +89,7 @@ file(READ "${CMAKE_CURRENT_SOURCE_DIR}/COPYING" ICINGA2_LICENSE_GPL)
 set(ICINGA2_LICENSE "${ICINGA2_LICENSE_GPL}\n\n---\n\n${ICINGA2_LICENSE_ADDITIONS}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/LICENSE.txt" ${ICINGA2_LICENSE})
 
-file(STRINGS VERSION SPEC_VERSION REGEX "^Version:")
+file(STRINGS ICINGA2_VERSION SPEC_VERSION REGEX "^Version:")
 string(LENGTH "${SPEC_VERSION}" SPEC_VERSION_LENGTH)
 math(EXPR SPEC_VERSION_LENGTH "${SPEC_VERSION_LENGTH} - 9")
 string(SUBSTRING ${SPEC_VERSION} 9 ${SPEC_VERSION_LENGTH} SPEC_VERSION)
@@ -102,7 +102,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/icinga-version.h.force)
   configure_file(icinga-version.h.force ${CMAKE_CURRENT_BINARY_DIR}/icinga-version.h COPYONLY)
 else()
   if(NOT ICINGA2_GIT_VERSION_INFO OR GIT_VERSION MATCHES "-NOTFOUND$")
-    file(STRINGS VERSION SPEC_REVISION REGEX "^Revision: ")
+    file(STRINGS ICINGA2_VERSION SPEC_REVISION REGEX "^Revision: ")
     string(LENGTH "${SPEC_REVISION}" SPEC_REVISION_LENGTH)
     math(EXPR SPEC_REVISION_LENGTH "${SPEC_REVISION_LENGTH} - 10")
     string(SUBSTRING ${SPEC_REVISION} 10 ${SPEC_REVISION_LENGTH} SPEC_REVISION)
@@ -119,7 +119,9 @@ endif()
 # NuGet on Windows requires a semantic versioning, example: 2.10.4.123 (only 4 element, only numeric)
 string(REGEX REPLACE "-([0-9]+).*$" ".\\1" ICINGA2_VERSION_SAFE "${ICINGA2_VERSION}")
 string(REGEX REPLACE "-[^\\.]*(.*)$" "\\1" ICINGA2_VERSION_SAFE "${ICINGA2_VERSION_SAFE}")
-message(STATUS "ICINGA2_VERSION_SAFE=${ICINGA2_VERSION_SAFE}")
+string(REGEX REPLACE "^([0-9]+\\.[0-9]+\\.[0-9]+)[\\.]?[0-9]*" "\\1" CHOCO_VERSION_SHORT "${ICINGA2_VERSION_SAFE}")
+
+message(STATUS "ICINGA2_VERSION_SAFE=${ICINGA2_VERSION_SAFE} CHOCO_VERSION_SHORT=${CHOCO_VERSION_SHORT}")
 
 if(WIN32)
   set(Boost_USE_STATIC_LIBS ON)
@@ -161,7 +163,7 @@ else()
   set(LOGROTATE_CREATE "\n\tcreate 644 ${ICINGA2_USER} ${ICINGA2_GROUP}")
 endif()
 
-find_package(Boost ${BOOST_MIN_VERSION} COMPONENTS context coroutine date_time filesystem thread system program_options regex REQUIRED)
+find_package(Boost ${BOOST_MIN_VERSION} COMPONENTS coroutine context date_time filesystem thread system program_options regex REQUIRED)
 
 # Boost.Coroutine2 (the successor of Boost.Coroutine)
 # (1) doesn't even exist in old Boost versions and
@@ -169,6 +171,9 @@ find_package(Boost ${BOOST_MIN_VERSION} COMPONENTS context coroutine date_time f
 add_definitions(-DBOOST_COROUTINES_NO_DEPRECATION_WARNING)
 
 add_definitions(-DBOOST_FILESYSTEM_NO_DEPRECATED)
+
+# Required for Boost v1.74+
+add_definitions(-DBOOST_ASIO_USE_TS_EXECUTOR_AS_DEFAULT)
 
 link_directories(${Boost_LIBRARY_DIRS})
 include_directories(${Boost_INCLUDE_DIRS})
@@ -197,10 +202,6 @@ include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/lib
   ${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_BINARY_DIR}/lib
 )
-
-if(HAVE_LIBEXECINFO)
-  list(APPEND base_DEPS execinfo)
-endif()
 
 if(UNIX OR CYGWIN)
   list(APPEND base_OBJS $<TARGET_OBJECTS:execvpe>)
@@ -360,6 +361,20 @@ check_include_file_cxx(cxxabi.h HAVE_CXXABI_H)
 
 if(HAVE_LIBEXECINFO)
   set(HAVE_BACKTRACE_SYMBOLS TRUE)
+  list(APPEND base_DEPS execinfo)
+endif()
+
+if(NOT WIN32)
+  # boost::stacktrace uses _Unwind_Backtrace which is only exposed if _GNU_SOURCE is defined on most systems
+  add_definitions(-D_GNU_SOURCE)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+  set(ICINGA2_STACKTRACE_USE_BACKTRACE_SYMBOLS TRUE)
+endif()
+
+if(ICINGA2_STACKTRACE_USE_BACKTRACE_SYMBOLS AND NOT HAVE_BACKTRACE_SYMBOLS)
+  message(FATAL_ERROR "ICINGA2_STACKTRACE_USE_BACKTRACE_SYMBOLS is set but backtrace_symbols() was not found")
 endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
@@ -370,6 +385,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 
   if("${CMAKE_CXX_COMPILER_VERSION}" VERSION_LESS "4.7.0")
     message(FATAL_ERROR "Your version of GCC (${CMAKE_CXX_COMPILER_VERSION}) is too old for building Icinga 2 (GCC >= 4.7.0 is required).")
+  endif()
+endif()
+
+if(MSVC)
+  if("${CMAKE_CXX_COMPILER_VERSION}" VERSION_LESS "19.20")
+    message(FATAL_ERROR "Your version of MSVC (${CMAKE_CXX_COMPILER_VERSION}) is too old for building Icinga 2 (MSVC >= 19.20 from Visual Studio 2019 is required).")
   endif()
 endif()
 
@@ -411,10 +432,7 @@ if(NOT MSVC)
   # ARM settings
   if("${ARCH}" STREQUAL "arm")
     check_cxx_source_compiles( "include <atomic>; int main(){ std::atomic<uint_fast64_t> x; x.fetch_add(1); x.sub_add(1);  }" CXX_ATOMIC)
-
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -latomic")
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -latomic")
-    set(CMAKE_STATIC_LINKER_FLAGS "${CMAKE_STATIC_LINKER_FLAGS} -latomic")
+    link_libraries(atomic)
   endif()
 
 else()

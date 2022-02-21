@@ -11,11 +11,13 @@ Icinga 2 supports three different types of logging:
 You can enable additional loggers using the `icinga2 feature enable`
 and `icinga2 feature disable` commands to configure loggers:
 
-Feature  | Description
----------|------------
-debuglog | Debug log (path: `/var/log/icinga2/debug.log`, severity: `debug` or higher)
-mainlog  | Main log (path: `/var/log/icinga2/icinga2.log`, severity: `information` or higher)
-syslog   | Syslog (severity: `warning` or higher)
+Feature         | Description
+----------------|------------
+debuglog        | Debug log (path: `/var/log/icinga2/debug.log`, severity: `debug` or higher)
+journald        | Systemd Journal (severity: `warning` or higher)
+mainlog         | Main log (path: `/var/log/icinga2/icinga2.log`, severity: `information` or higher)
+syslog          | Syslog (severity: `warning` or higher)
+windowseventlog | Windows Event Log (severity: `information` or higher)
 
 By default file the `mainlog` feature is enabled. When running Icinga 2
 on a terminal log messages with severity `information` or higher are
@@ -62,6 +64,12 @@ Requirements:
 * Icinga Web module
 
 Consult the [Icinga DB section](02-installation.md#configuring-icinga-db) in the installation chapter for setup instructions.
+
+We will deprecate the IDO and shift towards the Icinga DB as main backend,
+but we will not drop the IDO for now.
+We know that it takes time until the Icinga DB is adopted
+(maybe even up to one to two years)
+and we won’t drop the IDO until it is comfortable to do so.
 
 ### IDO Database (DB IDO) <a id="db-ido"></a>
 
@@ -192,7 +200,7 @@ mariadb> OPTIMIZE TABLE icinga_statehistory;
 If you want to optimize all tables in a specified database, there is a script called `mysqlcheck`.
 This also allows to repair broken tables in the case of emergency.
 
-```
+```bash
 mysqlcheck --optimize icinga
 ```
 
@@ -235,8 +243,8 @@ TCP port, defaulting to `2003`.
 
 You can enable the feature using
 
-```
-# icinga2 feature enable graphite
+```bash
+icinga2 feature enable graphite
 ```
 
 By default the [GraphiteWriter](09-object-types.md#objecttype-graphitewriter) feature
@@ -362,18 +370,25 @@ where Carbon Cache/Relay is running as receiver.
 ### InfluxDB Writer <a id="influxdb-writer"></a>
 
 Once there are new metrics available, Icinga 2 will directly write them to the
-defined InfluxDB HTTP API.
+defined InfluxDB v1/v2 HTTP API.
 
 You can enable the feature using
 
-```
-# icinga2 feature enable influxdb
+```bash
+icinga2 feature enable influxdb
 ```
 
-By default the [InfluxdbWriter](09-object-types.md#objecttype-influxdbwriter) feature
-expects the InfluxDB daemon to listen at `127.0.0.1` on port `8086`.
+or
 
-Measurement names and tags are fully configurable by the end user. The InfluxdbWriter
+```bash
+icinga2 feature enable influxdb2
+```
+
+By default the
+[InfluxdbWriter](09-object-types.md#objecttype-influxdbwriter)/[Influxdb2Writer](09-object-types.md#objecttype-influxdb2writer)
+features expect the InfluxDB daemon to listen at `127.0.0.1` on port `8086`.
+
+Measurement names and tags are fully configurable by the end user. The Influxdb(2)Writer
 object will automatically add a `metric` tag to each data point. This correlates to the
 perfdata label. Fields (value, warn, crit, min, max, unit) are created from data if available
 and the configuration allows it.  If a value associated with a tag is not able to be
@@ -384,12 +399,13 @@ escape characters when followed by a space or comma, but cannot be escaped thems
 As a result all trailling slashes in these fields are replaced with an underscore.  This
 predominantly affects Windows paths e.g. `C:\` becomes `C:_`.
 
-The database is assumed to exist so this object will make no attempt to create it currently.
+The database/bucket is assumed to exist so this object will make no attempt to create it currently.
 
 If [SELinux](22-selinux.md#selinux) is enabled, it will not allow access for Icinga 2 to InfluxDB until the [boolean](22-selinux.md#selinux-policy-booleans)
 `icinga2_can_connect_all` is set to true as InfluxDB is not providing its own policy.
 
-More configuration details can be found [here](09-object-types.md#objecttype-influxdbwriter).
+More configuration details can be found [here for v1](09-object-types.md#objecttype-influxdbwriter)
+and [here for v2](09-object-types.md#objecttype-influxdb2writer).
 
 #### Instance Tagging <a id="influxdb-writer-instance-tags"></a>
 
@@ -482,11 +498,11 @@ The check results include parsed performance data metrics if enabled.
 
 Enable the feature and restart Icinga 2.
 
-```
-# icinga2 feature enable elasticsearch
+```bash
+icinga2 feature enable elasticsearch
 ```
 
-The default configuration expects an Elasticsearch instance running on `localhost` on port `9200
+The default configuration expects an Elasticsearch instance running on `localhost` on port `9200`
  and writes to an index called `icinga2`.
 
 More configuration details can be found [here](09-object-types.md#objecttype-elasticsearchwriter).
@@ -556,18 +572,18 @@ or Logstash for additional filtering.
 
 #### GELF Writer <a id="gelfwriter"></a>
 
-The `Graylog Extended Log Format` (short: [GELF](http://docs.graylog.org/en/latest/pages/gelf.html))
+The `Graylog Extended Log Format` (short: [GELF](https://docs.graylog.org/en/latest/pages/gelf.html))
 can be used to send application logs directly to a TCP socket.
 
 While it has been specified by the [Graylog](https://www.graylog.org) project as their
-[input resource standard](http://docs.graylog.org/en/latest/pages/sending_data.html), other tools such as
+[input resource standard](https://docs.graylog.org/en/latest/pages/sending_data.html), other tools such as
 [Logstash](https://www.elastic.co/products/logstash) also support `GELF` as
 [input type](https://www.elastic.co/guide/en/logstash/current/plugins-inputs-gelf.html).
 
 You can enable the feature using
 
-```
-# icinga2 feature enable gelf
+```bash
+icinga2 feature enable gelf
 ```
 
 By default the `GelfWriter` object expects the GELF receiver to listen at `127.0.0.1` on TCP port `12201`.
@@ -606,8 +622,8 @@ write them to the defined TSDB TCP socket.
 
 You can enable the feature using
 
-```
-# icinga2 feature enable opentsdb
+```bash
+icinga2 feature enable opentsdb
 ```
 
 By default the `OpenTsdbWriter` object expects the TSD to listen at
@@ -882,8 +898,8 @@ service_format_template = "DATATYPE::SERVICEPERFDATA\tTIMET::$icinga.timet$\tHOS
 The default templates are already provided with the Icinga 2 feature configuration
 which can be enabled using
 
-```
-# icinga2 feature enable perfdata
+```bash
+icinga2 feature enable perfdata
 ```
 
 By default all performance data files are rotated in a 15 seconds interval into
@@ -915,7 +931,131 @@ is running on.
 
 
 
-## Livestatus <a id="setting-up-livestatus"></a>
+
+## Deprecated Features <a id="deprecated-features"></a>
+
+### Status Data Files <a id="status-data"></a>
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
+
+Icinga 1.x writes object configuration data and status data in a cyclic
+interval to its `objects.cache` and `status.dat` files. Icinga 2 provides
+the `StatusDataWriter` object which dumps all configuration objects and
+status updates in a regular interval.
+
+```bash
+icinga2 feature enable statusdata
+```
+
+If you are not using any web interface or addon which uses these files,
+you can safely disable this feature.
+
+### Compat Log Files <a id="compat-logging"></a>
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
+
+The Icinga 1.x log format is considered being the `Compat Log`
+in Icinga 2 provided with the `CompatLogger` object.
+
+These logs are used for informational representation in
+external web interfaces parsing the logs, but also to generate
+SLA reports and trends.
+The [Livestatus](14-features.md#setting-up-livestatus) feature uses these logs
+for answering queries to historical tables.
+
+The `CompatLogger` object can be enabled with
+
+```bash
+icinga2 feature enable compatlog
+```
+
+By default, the Icinga 1.x log file called `icinga.log` is located
+in `/var/log/icinga2/compat`. Rotated log files are moved into
+`var/log/icinga2/compat/archives`.
+
+### External Command Pipe <a id="external-commands"></a>
+
+> **Note**
+>
+> Please use the [REST API](12-icinga2-api.md#icinga2-api) as modern and secure alternative
+> for external actions.
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
+
+Icinga 2 provides an external command pipe for processing commands
+triggering specific actions (for example rescheduling a service check
+through the web interface).
+
+In order to enable the `ExternalCommandListener` configuration use the
+following command and restart Icinga 2 afterwards:
+
+```bash
+icinga2 feature enable command
+```
+
+Icinga 2 creates the command pipe file as `/var/run/icinga2/cmd/icinga2.cmd`
+using the default configuration.
+
+Web interfaces and other Icinga addons are able to send commands to
+Icinga 2 through the external command pipe, for example for rescheduling
+a forced service check:
+
+```
+# /bin/echo "[`date +%s`] SCHEDULE_FORCED_SVC_CHECK;localhost;ping4;`date +%s`" >> /var/run/icinga2/cmd/icinga2.cmd
+
+# tail -f /var/log/messages
+
+Oct 17 15:01:25 icinga-server icinga2: Executing external command: [1382014885] SCHEDULE_FORCED_SVC_CHECK;localhost;ping4;1382014885
+Oct 17 15:01:25 icinga-server icinga2: Rescheduling next check for service 'ping4'
+```
+
+A list of currently supported external commands can be found [here](24-appendix.md#external-commands-list-detail).
+
+Detailed information on the commands and their required parameters can be found
+on the [Icinga 1.x documentation](https://docs.icinga.com/latest/en/extcommands2.html).
+
+
+### Check Result Files <a id="check-result-files"></a>
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
+
+Icinga 1.x writes its check result files to a temporary spool directory
+where they are processed in a regular interval.
+While this is extremely inefficient in performance regards it has been
+rendered useful for passing passive check results directly into Icinga 1.x
+skipping the external command pipe.
+
+Several clustered/distributed environments and check-aggregation addons
+use that method. In order to support step-by-step migration of these
+environments, Icinga 2 supports the `CheckResultReader` object.
+
+There is no feature configuration available, but it must be defined
+on-demand in your Icinga 2 objects configuration.
+
+```
+object CheckResultReader "reader" {
+  spool_dir = "/data/check-results"
+}
+```
+
+### Livestatus <a id="setting-up-livestatus"></a>
+
+> **Note**
+>
+> This feature is DEPRECATED and may be removed in future releases.
+> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
 
 The [MK Livestatus](https://mathias-kettner.de/checkmk_livestatus.html) project
 implements a query protocol that lets users query their Icinga instance for
@@ -937,14 +1077,14 @@ in the [Livestatus Schema](24-appendix.md#schema-livestatus) section.
 
 You can enable Livestatus using icinga2 feature enable:
 
-```
-# icinga2 feature enable livestatus
+```bash
+icinga2 feature enable livestatus
 ```
 
 After that you will have to restart Icinga 2:
 
-```
-# systemctl restart icinga2
+```bash
+systemctl restart icinga2
 ```
 
 By default the Livestatus socket is available in `/var/run/icinga2/cmd/livestatus`.
@@ -952,8 +1092,8 @@ By default the Livestatus socket is available in `/var/run/icinga2/cmd/livestatu
 In order for queries and commands to work you will need to add your query user
 (e.g. your web server) to the `icingacmd` group:
 
-```
-# usermod -a -G icingacmd www-data
+```bash
+usermod -a -G icingacmd www-data
 ```
 
 The Debian packages use `nagios` as the user and group name. Make sure to change `icingacmd` to
@@ -966,11 +1106,11 @@ In order to use the historical tables provided by the livestatus feature (for ex
 are expected to be in `/var/log/icinga2/compat`. A different path can be set using the
 `compat_log_path` configuration attribute.
 
-```
-# icinga2 feature enable compatlog
+```bash
+icinga2 feature enable compatlog
 ```
 
-### Livestatus Sockets <a id="livestatus-sockets"></a>
+#### Livestatus Sockets <a id="livestatus-sockets"></a>
 
 Other to the Icinga 1.x Addon, Icinga 2 supports two socket types
 
@@ -980,7 +1120,7 @@ Other to the Icinga 1.x Addon, Icinga 2 supports two socket types
 Details on the configuration can be found in the [LivestatusListener](09-object-types.md#objecttype-livestatuslistener)
 object configuration.
 
-### Livestatus GET Queries <a id="livestatus-get-queries"></a>
+#### Livestatus GET Queries <a id="livestatus-get-queries"></a>
 
 > **Note**
 >
@@ -989,7 +1129,7 @@ object configuration.
 > a unix socket.
 
 There also is a Perl module available in CPAN for accessing the Livestatus socket
-programmatically: [Monitoring::Livestatus](http://search.cpan.org/~nierlein/Monitoring-Livestatus-0.74/)
+programmatically: [Monitoring::Livestatus](https://metacpan.org/release/NIERLEIN/Monitoring-Livestatus-0.74)
 
 
 Example using the unix socket:
@@ -1009,15 +1149,15 @@ EOF
 (cat servicegroups; sleep 1) | netcat 127.0.0.1 6558
 ```
 
-### Livestatus COMMAND Queries <a id="livestatus-command-queries"></a>
+#### Livestatus COMMAND Queries <a id="livestatus-command-queries"></a>
 
 A list of available external commands and their parameters can be found [here](24-appendix.md#external-commands-list-detail)
 
-```
-$ echo -e 'COMMAND <externalcommandstring>' | netcat 127.0.0.1 6558
+```bash
+echo -e 'COMMAND <externalcommandstring>' | netcat 127.0.0.1 6558
 ```
 
-### Livestatus Filters <a id="livestatus-filters"></a>
+#### Livestatus Filters <a id="livestatus-filters"></a>
 
 and, or, negate
 
@@ -1033,7 +1173,7 @@ and, or, negate
    >=       |          | Greater than or equal
 
 
-### Livestatus Stats <a id="livestatus-stats"></a>
+#### Livestatus Stats <a id="livestatus-stats"></a>
 
 Schema: "Stats: aggregatefunction aggregateattribute"
 
@@ -1067,7 +1207,7 @@ OutputFormat: json
 ResponseHeader: fixed16
 ```
 
-### Livestatus Output <a id="livestatus-output"></a>
+#### Livestatus Output <a id="livestatus-output"></a>
 
 * CSV
 
@@ -1085,7 +1225,7 @@ Separators: 10 59 44 124
 
 Default separators.
 
-### Livestatus Error Codes <a id="livestatus-error-codes"></a>
+#### Livestatus Error Codes <a id="livestatus-error-codes"></a>
 
   Code      | Description
   ----------|--------------
@@ -1093,7 +1233,7 @@ Default separators.
   404       | Table does not exist
   452       | Exception on query
 
-### Livestatus Tables <a id="livestatus-tables"></a>
+#### Livestatus Tables <a id="livestatus-tables"></a>
 
   Table         | Join      |Description
   --------------|-----------|----------------------------
@@ -1118,122 +1258,3 @@ Default separators.
 The `commands` table is populated with `CheckCommand`, `EventCommand` and `NotificationCommand` objects.
 
 A detailed list on the available table attributes can be found in the [Livestatus Schema documentation](24-appendix.md#schema-livestatus).
-
-
-## Deprecated Features <a id="deprecated-features"></a>
-
-### Status Data Files <a id="status-data"></a>
-
-> **Note**
->
-> This feature is DEPRECATED and will be removed in future releases.
-> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
-
-Icinga 1.x writes object configuration data and status data in a cyclic
-interval to its `objects.cache` and `status.dat` files. Icinga 2 provides
-the `StatusDataWriter` object which dumps all configuration objects and
-status updates in a regular interval.
-
-```
-# icinga2 feature enable statusdata
-```
-
-If you are not using any web interface or addon which uses these files,
-you can safely disable this feature.
-
-### Compat Log Files <a id="compat-logging"></a>
-
-> **Note**
->
-> This feature is DEPRECATED and will be removed in future releases.
-> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
-
-The Icinga 1.x log format is considered being the `Compat Log`
-in Icinga 2 provided with the `CompatLogger` object.
-
-These logs are used for informational representation in
-external web interfaces parsing the logs, but also to generate
-SLA reports and trends.
-The [Livestatus](14-features.md#setting-up-livestatus) feature uses these logs
-for answering queries to historical tables.
-
-The `CompatLogger` object can be enabled with
-
-```
-# icinga2 feature enable compatlog
-```
-
-By default, the Icinga 1.x log file called `icinga.log` is located
-in `/var/log/icinga2/compat`. Rotated log files are moved into
-`var/log/icinga2/compat/archives`.
-
-### External Command Pipe <a id="external-commands"></a>
-
-> **Note**
->
-> Please use the [REST API](12-icinga2-api.md#icinga2-api) as modern and secure alternative
-> for external actions.
-
-> **Note**
->
-> This feature is DEPRECATED and will be removed in future releases.
-> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
-
-Icinga 2 provides an external command pipe for processing commands
-triggering specific actions (for example rescheduling a service check
-through the web interface).
-
-In order to enable the `ExternalCommandListener` configuration use the
-following command and restart Icinga 2 afterwards:
-
-```
-# icinga2 feature enable command
-```
-
-Icinga 2 creates the command pipe file as `/var/run/icinga2/cmd/icinga2.cmd`
-using the default configuration.
-
-Web interfaces and other Icinga addons are able to send commands to
-Icinga 2 through the external command pipe, for example for rescheduling
-a forced service check:
-
-```
-# /bin/echo "[`date +%s`] SCHEDULE_FORCED_SVC_CHECK;localhost;ping4;`date +%s`" >> /var/run/icinga2/cmd/icinga2.cmd
-
-# tail -f /var/log/messages
-
-Oct 17 15:01:25 icinga-server icinga2: Executing external command: [1382014885] SCHEDULE_FORCED_SVC_CHECK;localhost;ping4;1382014885
-Oct 17 15:01:25 icinga-server icinga2: Rescheduling next check for service 'ping4'
-```
-
-A list of currently supported external commands can be found [here](24-appendix.md#external-commands-list-detail).
-
-Detailed information on the commands and their required parameters can be found
-on the [Icinga 1.x documentation](https://docs.icinga.com/latest/en/extcommands2.html).
-
-
-### Check Result Files <a id="check-result-files"></a>
-
-> **Note**
->
-> This feature is DEPRECATED and will be removed in future releases.
-> Check the [roadmap](https://github.com/Icinga/icinga2/milestones).
-
-Icinga 1.x writes its check result files to a temporary spool directory
-where they are processed in a regular interval.
-While this is extremely inefficient in performance regards it has been
-rendered useful for passing passive check results directly into Icinga 1.x
-skipping the external command pipe.
-
-Several clustered/distributed environments and check-aggregation addons
-use that method. In order to support step-by-step migration of these
-environments, Icinga 2 supports the `CheckResultReader` object.
-
-There is no feature configuration available, but it must be defined
-on-demand in your Icinga 2 objects configuration.
-
-```
-object CheckResultReader "reader" {
-  spool_dir = "/data/check-results"
-}
-```

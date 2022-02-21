@@ -45,8 +45,19 @@ void DbConnection::Start(bool runtimeCreated)
 	Log(LogInformation, "DbConnection")
 		<< "'" << GetName() << "' started.";
 
-	DbObject::OnQuery.connect(std::bind(&DbConnection::ExecuteQuery, this, _1));
-	DbObject::OnMultipleQueries.connect(std::bind(&DbConnection::ExecuteMultipleQueries, this, _1));
+	auto onQuery = [this](const DbQuery& query) { ExecuteQuery(query); };
+	DbObject::OnQuery.connect(onQuery);
+
+	auto onMultipleQueries = [this](const std::vector<DbQuery>& multiQueries) { ExecuteMultipleQueries(multiQueries); };
+	DbObject::OnMultipleQueries.connect(onMultipleQueries);
+
+	DbObject::QueryCallbacks queryCallbacks;
+	queryCallbacks.Query = onQuery;
+	queryCallbacks.MultipleQueries = onMultipleQueries;
+
+	DbObject::OnMakeQueries.connect([queryCallbacks](const std::function<void (const DbObject::QueryCallbacks&)>& queryFunc) {
+		queryFunc(queryCallbacks);
+	});
 }
 
 void DbConnection::Stop(bool runtimeRemoved)
@@ -60,7 +71,7 @@ void DbConnection::Stop(bool runtimeRemoved)
 void DbConnection::EnableActiveChangedHandler()
 {
 	if (!m_ActiveChangedHandler) {
-		ConfigObject::OnActiveChanged.connect(std::bind(&DbConnection::UpdateObject, this, _1));
+		ConfigObject::OnActiveChanged.connect([this](const ConfigObject::Ptr& object, const Value&) { UpdateObject(object); });
 		m_ActiveChangedHandler = true;
 	}
 }
@@ -74,14 +85,19 @@ void DbConnection::Resume()
 
 	m_CleanUpTimer = new Timer();
 	m_CleanUpTimer->SetInterval(60);
-	m_CleanUpTimer->OnTimerExpired.connect(std::bind(&DbConnection::CleanUpHandler, this));
+	m_CleanUpTimer->OnTimerExpired.connect([this](const Timer * const&) { CleanUpHandler(); });
 	m_CleanUpTimer->Start();
+
+	m_LogStatsTimeout = 0;
+
+	m_LogStatsTimer = new Timer();
+	m_LogStatsTimer->SetInterval(10);
+	m_LogStatsTimer->OnTimerExpired.connect([this](const Timer * const&) { LogStatsHandler(); });
+	m_LogStatsTimer->Start();
 }
 
 void DbConnection::Pause()
 {
-	ConfigObject::Pause();
-
 	Log(LogInformation, "DbConnection")
 		<< "Pausing IDO connection: " << GetName();
 
@@ -98,7 +114,9 @@ void DbConnection::Pause()
 
 	query1.Fields = new Dictionary({
 		{ "instance_id", 0 }, /* DbConnection class fills in real ID */
-		{ "program_end_time", DbValue::FromTimestamp(Utility::GetTime()) }
+		{ "program_end_time", DbValue::FromTimestamp(Utility::GetTime()) },
+		{ "is_currently_running", 0 },
+		{ "process_id", Empty }
 	});
 
 	query1.Priority = PriorityHigh;
@@ -106,13 +124,20 @@ void DbConnection::Pause()
 	ExecuteQuery(query1);
 
 	NewTransaction();
+
+	m_QueryQueue.Enqueue([this]() { Disconnect(); }, PriorityLow);
+
+	/* Work on remaining tasks but never delete the threads, for HA resuming later. */
+	m_QueryQueue.Join();
+
+	ConfigObject::Pause();
 }
 
 void DbConnection::InitializeDbTimer()
 {
 	m_ProgramStatusTimer = new Timer();
 	m_ProgramStatusTimer->SetInterval(10);
-	m_ProgramStatusTimer->OnTimerExpired.connect(std::bind(&DbConnection::UpdateProgramStatus));
+	m_ProgramStatusTimer->OnTimerExpired.connect([](const Timer * const&) { UpdateProgramStatus(); });
 	m_ProgramStatusTimer->Start();
 }
 
@@ -143,12 +168,17 @@ void DbConnection::UpdateProgramStatus()
 	std::vector<DbQuery> queries;
 
 	DbQuery query1;
-	query1.Table = "programstatus";
-	query1.IdColumn = "programstatus_id";
-	query1.Type = DbQueryInsert | DbQueryUpdate;
-	query1.Category = DbCatProgramStatus;
+	query1.Type = DbQueryNewTransaction;
+	query1.Priority = PriorityImmediate;
+	queries.emplace_back(std::move(query1));
 
-	query1.Fields = new Dictionary({
+	DbQuery query2;
+	query2.Table = "programstatus";
+	query2.IdColumn = "programstatus_id";
+	query2.Type = DbQueryInsert | DbQueryDelete;
+	query2.Category = DbCatProgramStatus;
+
+	query2.Fields = new Dictionary({
 		{ "instance_id", 0 }, /* DbConnection class fills in real ID */
 		{ "program_version", Application::GetAppVersion() },
 		{ "status_update_time", DbValue::FromTimestamp(Utility::GetTime()) },
@@ -168,27 +198,26 @@ void DbConnection::UpdateProgramStatus()
 		{ "process_performance_data", (icingaApplication->GetEnablePerfdata() ? 1 : 0) }
 	});
 
-	query1.WhereCriteria = new Dictionary({
+	query2.WhereCriteria = new Dictionary({
 		{ "instance_id", 0 }  /* DbConnection class fills in real ID */
 	});
 
-	query1.Priority = PriorityHigh;
-	queries.emplace_back(std::move(query1));
-
-	DbQuery query2;
-	query2.Type = DbQueryNewTransaction;
 	queries.emplace_back(std::move(query2));
+
+	DbQuery query3;
+	query3.Type = DbQueryNewTransaction;
+	queries.emplace_back(std::move(query3));
 
 	DbObject::OnMultipleQueries(queries);
 
-	DbQuery query3;
-	query3.Table = "runtimevariables";
-	query3.Type = DbQueryDelete;
-	query3.Category = DbCatProgramStatus;
-	query3.WhereCriteria = new Dictionary({
+	DbQuery query4;
+	query4.Table = "runtimevariables";
+	query4.Type = DbQueryDelete;
+	query4.Category = DbCatProgramStatus;
+	query4.WhereCriteria = new Dictionary({
 		{ "instance_id", 0 } /* DbConnection class fills in real ID */
 	});
-	DbObject::OnQuery(query3);
+	DbObject::OnQuery(query4);
 
 	InsertRuntimeVariable("total_services", ConfigType::Get<Service>()->GetObjectCount());
 	InsertRuntimeVariable("total_scheduled_services", ConfigType::Get<Service>()->GetObjectCount());
@@ -234,6 +263,38 @@ void DbConnection::CleanUpHandler()
 			<< " old: " << now - max_age;
 	}
 
+}
+
+void DbConnection::LogStatsHandler()
+{
+	if (!GetConnected() || IsPaused())
+		return;
+
+	auto pending = m_PendingQueries.load();
+
+	auto now = Utility::GetTime();
+	bool timeoutReached = m_LogStatsTimeout < now;
+
+	if (pending == 0u && !timeoutReached) {
+		return;
+	}
+
+	auto output = round(m_OutputQueries.CalculateRate(now, 10));
+
+	if (pending < output * 5 && !timeoutReached) {
+		return;
+	}
+
+	auto input = round(m_InputQueries.CalculateRate(now, 10));
+
+	Log(LogInformation, GetReflectionType()->GetName())
+		<< "Pending queries: " << pending << " (Input: " << input
+		<< "/s; Output: " << output << "/s)";
+
+	/* Reschedule next log entry in 5 minutes. */
+	if (timeoutReached) {
+		m_LogStatsTimeout = now + 60 * 5;
+	}
 }
 
 void DbConnection::CleanUpExecuteQuery(const String&, const String&, double)
@@ -446,7 +507,7 @@ void DbConnection::UpdateAllObjects()
 			continue;
 
 		for (const ConfigObject::Ptr& object : dtype->GetObjects()) {
-			UpdateObject(object);
+			m_QueryQueue.Enqueue([this, object](){ UpdateObject(object); }, PriorityHigh);
 		}
 	}
 }
@@ -483,13 +544,13 @@ void DbConnection::IncreaseQueryCount()
 {
 	double now = Utility::GetTime();
 
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	m_QueryStats.InsertValue(now, 1);
 }
 
 int DbConnection::GetQueryCount(RingBuffer::SizeType span)
 {
-	boost::mutex::scoped_lock lock(m_StatsMutex);
+	std::unique_lock<std::mutex> lock(m_StatsMutex);
 	return m_QueryStats.UpdateAndGetValues(Utility::GetTime(), span);
 }
 
@@ -506,4 +567,16 @@ void DbConnection::SetIDCacheValid(bool valid)
 int DbConnection::GetSessionToken()
 {
 	return Application::GetStartTime();
+}
+
+void DbConnection::IncreasePendingQueries(int count)
+{
+	m_PendingQueries.fetch_add(count);
+	m_InputQueries.InsertValue(Utility::GetTime(), count);
+}
+
+void DbConnection::DecreasePendingQueries(int count)
+{
+	m_PendingQueries.fetch_sub(count);
+	m_OutputQueries.InsertValue(Utility::GetTime(), count);
 }

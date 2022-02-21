@@ -53,13 +53,13 @@ by trying to run it on the console using whichever user Icinga 2 is running as:
 
 RHEL/CentOS/Fedora
 
-```
+```bash
 sudo -u icinga /usr/lib64/nagios/plugins/check_mysql_health --help
 ```
 
 Debian/Ubuntu
 
-```
+```bash
 sudo -u nagios /usr/lib/nagios/plugins/check_mysql_health --help
 ```
 
@@ -123,7 +123,7 @@ and reference this in the created CheckCommand objects.
 Create a common directory e.g. `/opt/monitoring/plugins`
 and install the plugin there.
 
-```
+```bash
 mkdir -p /opt/monitoring/plugins
 cp check_snmp_int.pl /opt/monitoring/plugins
 chmod +x /opt/monitoring/plugins/check_snmp_int.pl
@@ -155,7 +155,7 @@ with the required parameters first.
 
 Example for database size checks with [check_mysql_health](10-icinga-template-library.md#plugin-contrib-command-mysql_health).
 
-```
+```bash
 /usr/lib64/nagios/plugins/check_mysql_health --hostname '127.0.0.1' --username root --password icingar0xx --mode sql --name 'select sum(data_length + index_length) / 1024 / 1024 from information_schema.tables where table_schema = '\''icinga'\'';' '--name2' 'db_size' --units 'MB' --warning 4096 --critical 8192
 ```
 
@@ -520,7 +520,7 @@ add them to the argument parser.
 
 Example for Python:
 
-```
+```python
 import argparse
 import signal
 import sys
@@ -538,7 +538,7 @@ Users might call plugins only with the critical threshold parameter,
 leaving out the warning parameter. Keep this in mind when evaluating
 the thresholds, always check if the parameters have been defined before.
 
-```
+```python
     if args.critical:
         if ptc_value > args.critical:
             print("CRITICAL - ...")
@@ -646,21 +646,52 @@ Icinga sets `LC_NUMERIC=C` to enforce this locale on plugin execution.
 
 ##### Unit of Measurement (UOM) <a id="service-monitoring-plugin-api-performance-data-metrics-uom"></a>
 
-Unit     | Description
----------|---------------------------------
-None     | Integer or floating point number for any type (processes, users, etc.).
-`s`      | Seconds, can be `s`, `ms`, `us`.
-`%`      | Percentage.
-`B`      | Bytes, can be `KB`, `MB`, `GB`, `TB`. Lowercase is also possible.
-`c`      | A continuous counter (e.g. interface traffic counters).
-
-Icinga metric writers normalize these values to the lowest common base, e.g. seconds and bytes.
-Bad plugins change the UOM for different sizing, e.g. returning the disk usage in MB and later GB
-for the same performance data label. This is to ensure that graphs always look the same.
-
 ```
 'rta'=12.445000ms 'pl'=0%
 ```
+
+The UoMs are written as-is into the [core backends](14-features.md#core-backends)
+(IDO, API). I.e. 12.445000ms remain 12.445000ms.
+
+In contrast, the [metric backends](14-features.md#metrics)
+(Graphite, InfluxDB, etc.) get perfdata (including warn, crit, min, max)
+normalized by Icinga. E.g. 12.445000ms become 0.012445 seconds.
+
+Some plugins change the UoM for different sizing, e.g. returning the disk usage in MB and later GB
+for the same performance data label. This is to ensure that graphs always look the same.
+
+[Icinga DB](14-features.md#core-backends-icingadb) gets both the as-is and the normalized perfdata.
+
+What metric backends get... | ... from which perfdata UoMs (case-insensitive if possible)
+----------------------------|---------------------------------------
+bytes (B)                   | B, KB, MB, ..., YB, KiB, MiB, ..., YiB
+bits (b)                    | b, kb, mb, ..., yb, kib, mib, ..., yib
+packets                     | packets
+seconds (s)                 | ns, us, ms, s, m, h, d
+percent                     | %
+amperes (A)                 | nA, uA, mA, A, kA, MA, GA, ..., YA
+ohms (O)                    | nO, uO, mO, O, kO, MO, GO, ..., YO
+volts (V)                   | nV, uV, mV, V, kV, MV, GV, ..., YV
+watts (W)                   | nW, uW, mW, W, kW, MW, GW, ..., YW
+ampere seconds (As)         | nAs, uAs, mAs, As, kAs, MAs, GAs, ..., YAs
+ampere seconds              | nAm, uAm, mAm, Am (ampere minutes), kAm, MAm, GAm, ..., YAm
+ampere seconds              | nAh, uAh, mAh, Ah (ampere hours), kAh, MAh, GAh, ..., YAh
+watt hours                  | nWs, uWs, mWs, Ws (watt seconds), kWs, MWs, GWs, ..., YWs
+watt hours                  | nWm, uWm, mWm, Wm (watt minutes), kWm, MWm, GWm, ..., YWm
+watt hours (Wh)             | nWh, uWh, mWh, Wh, kWh, MWh, GWh, ..., YWh
+lumens                      | lm
+decibel-milliwatts          | dBm
+grams (g)                   | ng, ug, mg, g, kg, t
+degrees Celsius             | C
+degrees Fahrenheit          | F
+degrees Kelvin              | K
+liters (l)                  | ml, l, hl
+
+The UoM "c" represents a continuous counter (e.g. interface traffic counters).
+
+Unknown UoMs are discarted (as if none was given).
+A value without any UoM may be an integer or floating point number
+for any type (processes, users, etc.).
 
 ##### Thresholds and Min/Max <a id="service-monitoring-plugin-api-performance-data-metrics-thresholds-min-max"></a>
 
@@ -693,7 +724,7 @@ and provide a clear message followed by the Unknown state.
 
 Example in Python taken from [check_tinkerforge](https://github.com/NETWAYS/check_tinkerforge/blob/master/check_tinkerforge.py):
 
-```
+```python
 import argparse
 import signal
 import sys
@@ -721,7 +752,7 @@ too old or new versions on the community support channels.
 
 Example in Python taken from [check_tinkerforge](https://github.com/NETWAYS/check_tinkerforge/blob/master/check_tinkerforge.py):
 
-```
+```python
 import argparse
 import signal
 import sys
@@ -745,7 +776,7 @@ the plugin.
 
 Example in Python taken from [check_tinkerforge](https://github.com/NETWAYS/check_tinkerforge/blob/master/check_tinkerforge.py):
 
-```
+```python
 import argparse
 import signal
 import sys
@@ -867,11 +898,11 @@ Instead, choose a plugin and configure its parameters and thresholds. The follow
 * [running_kernel](10-icinga-template-library.md#plugin-contrib-command-running_kernel)
 * package management: [apt](10-icinga-template-library.md#plugin-check-command-apt), [yum](10-icinga-template-library.md#plugin-contrib-command-yum), etc.
 * [ssh](10-icinga-template-library.md#plugin-check-command-ssh)
-* performance: [iostat](10-icinga-template-library.md#plugin-contrib-command-iostat), [check_sar_perf](https://github.com/dnsmichi/icinga-plugins/blob/master/scripts/check_sar_perf.py)
+* performance: [iostat](10-icinga-template-library.md#plugin-contrib-command-iostat), [check_sar_perf](https://github.com/NETWAYS/check-sar-perf)
 
 ### Windows Monitoring <a id="service-monitoring-windows"></a>
 
-* [check_wmi_plus](http://www.edcint.co.nz/checkwmiplus/)
+* [check_wmi_plus](https://edcint.co.nz/checkwmiplus/)
 * [NSClient++](https://www.nsclient.org) (in combination with the Icinga 2 client and either [check_nscp_api](10-icinga-template-library.md#nscp-check-api) or [nscp-local](10-icinga-template-library.md#nscp-plugin-check-commands) check commands)
 * [Icinga 2 Windows Plugins](10-icinga-template-library.md#windows-plugins) (disk, load, memory, network, performance counters, ping, procs, service, swap, updates, uptime, users
 * vbs and Powershell scripts
@@ -929,7 +960,7 @@ Instead, choose a plugin and configure its parameters and thresholds. The follow
 ### Log Monitoring <a id="service-monitoring-log"></a>
 
 * [check_logfiles](https://labs.consol.de/nagios/check_logfiles/)
-* [check_logstash](https://github.com/widhalmt/check_logstash)
+* [check_logstash](https://github.com/NETWAYS/check_logstash)
 * [check_graylog2_stream](https://github.com/Graylog2/check-graylog2-stream)
 
 ### Virtualization Monitoring <a id="service-monitoring-virtualization"></a>
@@ -943,7 +974,7 @@ Instead, choose a plugin and configure its parameters and thresholds. The follow
 **Tip**: If you are encountering timeouts using the VMware Perl SDK,
 check [this blog entry](https://www.claudiokuenzler.com/blog/650/slow-vmware-perl-sdk-soap-request-error-libwww-version).
 Ubuntu 16.04 LTS can have troubles with random entropy in Perl asked [here](https://monitoring-portal.org/t/check-vmware-api-slow-when-run-multiple-times/2868).
-In that case, [haveged](http://issihosts.com/haveged/) may help.
+In that case, [haveged](https://issihosts.com/haveged/) may help.
 
 ### SAP Monitoring <a id="service-monitoring-sap"></a>
 

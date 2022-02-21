@@ -28,7 +28,7 @@
 
 using namespace icinga;
 
-boost::mutex ConfigItem::m_Mutex;
+std::mutex ConfigItem::m_Mutex;
 ConfigItem::TypeMap ConfigItem::m_Items;
 ConfigItem::TypeMap ConfigItem::m_DefaultTemplates;
 ConfigItem::ItemList ConfigItem::m_UnnamedItems;
@@ -195,7 +195,7 @@ ConfigObject::Ptr ConfigItem::Commit(bool discard)
 				<< "Ignoring config object '" << m_Name << "' of type '" << type->GetName() << "' due to errors: " << DiagnosticInformation(ex);
 
 			{
-				boost::mutex::scoped_lock lock(m_Mutex);
+				std::unique_lock<std::mutex> lock(m_Mutex);
 				m_IgnoredItems.push_back(m_DebugInfo.Path);
 			}
 
@@ -247,7 +247,7 @@ ConfigObject::Ptr ConfigItem::Commit(bool discard)
 				<< "Ignoring config object '" << m_Name << "' of type '" << type->GetName() << "' due to errors: " << DiagnosticInformation(ex);
 
 			{
-				boost::mutex::scoped_lock lock(m_Mutex);
+				std::unique_lock<std::mutex> lock(m_Mutex);
 				m_IgnoredItems.push_back(m_DebugInfo.Path);
 			}
 
@@ -266,7 +266,7 @@ ConfigObject::Ptr ConfigItem::Commit(bool discard)
 				<< "Ignoring config object '" << m_Name << "' of type '" << m_Type->GetName() << "' due to errors: " << DiagnosticInformation(ex);
 
 			{
-				boost::mutex::scoped_lock lock(m_Mutex);
+				std::unique_lock<std::mutex> lock(m_Mutex);
 				m_IgnoredItems.push_back(m_DebugInfo.Path);
 			}
 
@@ -317,7 +317,7 @@ void ConfigItem::Register()
 {
 	m_ActivationContext = ActivationContext::GetCurrentContext();
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	/* If this is a non-abstract object with a composite name
 	 * we register it in m_UnnamedItems instead of m_Items. */
@@ -353,7 +353,7 @@ void ConfigItem::Unregister()
 		m_Object.reset();
 	}
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 	m_UnnamedItems.erase(std::remove(m_UnnamedItems.begin(), m_UnnamedItems.end(), this), m_UnnamedItems.end());
 	m_Items[m_Type].erase(m_Name);
 	m_DefaultTemplates[m_Type].erase(m_Name);
@@ -368,7 +368,7 @@ void ConfigItem::Unregister()
  */
 ConfigItem::Ptr ConfigItem::GetByTypeAndName(const Type::Ptr& type, const String& name)
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	auto it = m_Items.find(type);
 
@@ -389,7 +389,7 @@ bool ConfigItem::CommitNewItems(const ActivationContext::Ptr& context, WorkQueue
 	std::vector<ItemPair> items;
 
 	{
-		boost::mutex::scoped_lock lock(m_Mutex);
+		std::unique_lock<std::mutex> lock(m_Mutex);
 
 		for (const TypeMap::value_type& kv : m_Items) {
 			for (const ItemMap::value_type& kv2 : kv.second) {
@@ -534,7 +534,7 @@ bool ConfigItem::CommitNewItems(const ActivationContext::Ptr& context, WorkQueue
 					item->Unregister();
 
 					{
-						boost::mutex::scoped_lock lock(item->m_Mutex);
+						std::unique_lock<std::mutex> lock(item->m_Mutex);
 						item->m_IgnoredItems.push_back(item->m_DebugInfo.Path);
 					}
 				}
@@ -624,11 +624,21 @@ bool ConfigItem::CommitItems(const ActivationContext::Ptr& context, WorkQueue& u
 	return true;
 }
 
-bool ConfigItem::ActivateItems(WorkQueue& upq, const std::vector<ConfigItem::Ptr>& newItems, bool runtimeCreated,
-	bool silent, bool withModAttrs, const Value& cookie)
+/**
+ * ActivateItems activates new config items.
+ *
+ * @param newItems Vector of items to be activated
+ * @param runtimeCreated Whether the objects were created by a runtime object
+ * @param mainConfigActivation Whether this is the call for activating the main configuration during startup
+ * @param withModAttrs Whether this call shall read the modified attributes file
+ * @param cookie Cookie for preventing message loops
+ * @return Whether the config activation was successful (in case of errors, exceptions are thrown)
+ */
+bool ConfigItem::ActivateItems(const std::vector<ConfigItem::Ptr>& newItems, bool runtimeCreated,
+	bool mainConfigActivation, bool withModAttrs, const Value& cookie)
 {
-	static boost::mutex mtx;
-	boost::mutex::scoped_lock lock(mtx);
+	static std::mutex mtx;
+	std::unique_lock<std::mutex> lock(mtx);
 
 	if (withModAttrs) {
 		/* restore modified attributes */
@@ -663,7 +673,7 @@ bool ConfigItem::ActivateItems(WorkQueue& upq, const std::vector<ConfigItem::Ptr
 		object->PreActivate();
 	}
 
-	if (!silent)
+	if (mainConfigActivation)
 		Log(LogInformation, "ConfigItem", "Triggering Start signal for config items");
 
 	/* Activate objects in priority order. */
@@ -674,6 +684,14 @@ bool ConfigItem::ActivateItems(WorkQueue& upq, const std::vector<ConfigItem::Ptr
 			return true;
 		return false;
 	});
+
+	/* Find the last logger type to be activated. */
+	Type::Ptr lastLoggerType = nullptr;
+	for (const Type::Ptr& type : types) {
+		if (Logger::TypeInstance->IsAssignableFrom(type)) {
+			lastLoggerType = type;
+		}
+	}
 
 	for (const Type::Ptr& type : types) {
 		for (const ConfigItem::Ptr& item : newItems) {
@@ -695,27 +713,14 @@ bool ConfigItem::ActivateItems(WorkQueue& upq, const std::vector<ConfigItem::Ptr
 
 			object->Activate(runtimeCreated, cookie);
 		}
+
+		if (mainConfigActivation && type == lastLoggerType) {
+			/* Disable early logging configuration once the last logger type was activated. */
+			Logger::DisableEarlyLogging();
+		}
 	}
 
-	upq.Join();
-
-	if (upq.HasExceptions()) {
-		upq.ReportExceptions("ConfigItem");
-		return false;
-	}
-
-#ifdef I2_DEBUG
-	for (const ConfigItem::Ptr& item : newItems) {
-		ConfigObject::Ptr object = item->m_Object;
-
-		if (!object)
-			continue;
-
-		ASSERT(object && object->IsActive());
-	}
-#endif /* I2_DEBUG */
-
-	if (!silent)
+	if (mainConfigActivation)
 		Log(LogInformation, "ConfigItem", "Activated all objects.");
 
 	return true;
@@ -738,7 +743,7 @@ bool ConfigItem::RunWithActivationContext(const Function::Ptr& function)
 	if (!CommitItems(scope.GetContext(), upq, newItems, true))
 		return false;
 
-	if (!ActivateItems(upq, newItems, false, true))
+	if (!ActivateItems(newItems, false, false))
 		return false;
 
 	return true;
@@ -748,7 +753,7 @@ std::vector<ConfigItem::Ptr> ConfigItem::GetItems(const Type::Ptr& type)
 {
 	std::vector<ConfigItem::Ptr> items;
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	auto it = m_Items.find(type);
 
@@ -768,7 +773,7 @@ std::vector<ConfigItem::Ptr> ConfigItem::GetDefaultTemplates(const Type::Ptr& ty
 {
 	std::vector<ConfigItem::Ptr> items;
 
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	auto it = m_DefaultTemplates.find(type);
 
@@ -786,7 +791,7 @@ std::vector<ConfigItem::Ptr> ConfigItem::GetDefaultTemplates(const Type::Ptr& ty
 
 void ConfigItem::RemoveIgnoredItems(const String& allowedConfigPath)
 {
-	boost::mutex::scoped_lock lock(m_Mutex);
+	std::unique_lock<std::mutex> lock(m_Mutex);
 
 	for (const String& path : m_IgnoredItems) {
 		if (path.Find(allowedConfigPath) == String::NPos)

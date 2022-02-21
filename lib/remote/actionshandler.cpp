@@ -4,11 +4,14 @@
 #include "remote/httputility.hpp"
 #include "remote/filterutility.hpp"
 #include "remote/apiaction.hpp"
+#include "base/defer.hpp"
 #include "base/exception.hpp"
 #include "base/logger.hpp"
 #include <set>
 
 using namespace icinga;
+
+thread_local ApiUser::Ptr ActionsHandler::AuthenticatedApiUser;
 
 REGISTER_URLHANDLER("/v1/actions", ActionsHandler);
 
@@ -71,6 +74,11 @@ bool ActionsHandler::HandleRequest(
 
 	bool verbose = false;
 
+	ActionsHandler::AuthenticatedApiUser = user;
+	Defer a ([]() {
+		ActionsHandler::AuthenticatedApiUser = nullptr;
+	});
+
 	if (params)
 		verbose = HttpUtility::GetLastParameter(params, "verbose");
 
@@ -92,12 +100,31 @@ bool ActionsHandler::HandleRequest(
 	}
 
 	int statusCode = 500;
+	std::set<int> okStatusCodes, nonOkStatusCodes;
 
 	for (const Dictionary::Ptr& res : results) {
-		if (res->Contains("code") && res->Get("code") == 200) {
-			statusCode = 200;
-			break;
+		if (!res->Contains("code")) {
+			continue;
 		}
+
+		auto code = res->Get("code");
+
+		if (code >= 200 && code <= 299) {
+			okStatusCodes.insert(code);
+		} else {
+			nonOkStatusCodes.insert(code);
+		}
+	}
+
+	size_t okSize = okStatusCodes.size();
+	size_t nonOkSize = nonOkStatusCodes.size();
+
+	if (okSize == 1u && nonOkSize == 0u) {
+		statusCode = *okStatusCodes.begin();
+	} else if (nonOkSize == 1u) {
+		statusCode = *nonOkStatusCodes.begin();
+	} else if (okSize >= 2u && nonOkSize == 0u) {
+		statusCode = 200;
 	}
 
 	response.result(statusCode);
