@@ -2835,7 +2835,7 @@ Name                   | Description
 -----------------------|-----------------------------------------------------------------------
 smart_device           | **Required.** Path to physical block device to be SMART monitored, e.g. /dev/sda. In combination with `smart_device_is_glob` (set to true) can also be used to monitor multiple drives at the same time (e.g. "/dev/sd[a-z]").
 smart_interface        | **Optional.** Drive's interface type, must be one of: auto, ata, scsi, nvme, 3ware,N, areca,N, hpt,L/M/N, cciss,N, megaraid,N.
-smart_device_is_glob   | **Optional.** If set to true, will use `smart_device` as glob expression (e.g. "/dev/sd[a-z]"). Allows to monitor multiple drives. 
+smart_device_is_glob   | **Optional.** If set to true, will use `smart_device` as glob expression (e.g. "/dev/sd[a-z]"). Allows to monitor multiple drives with one check.
 smart_raw_list         | **Optional.** List (comma separated, without spaces!) of SMART attributes to check for their raw values.
 smart_exclude_list     | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) from checks, but still appear in perfdata.
 smart_exclude_all_list | **Optional.** List of (comma separated) SMART attributes which should be excluded (=ignored) **completely** from checks and perfdata.
