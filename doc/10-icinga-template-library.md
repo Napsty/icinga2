@@ -2825,7 +2825,7 @@ smart_attributes_device         | **Required.** Device name (e.g. /dev/sda) to m
 
 #### smart-advanced <a id="plugin-contrib-command-smart-advanced"></a>
 
-The [check_smart](https://www.claudiokuenzler.com/monitoring-plugins/check_smart.php) plugin uses the `smartctl` command from the `smartmontools` package to monitor SMART values of physical drives. Hard, solid state and NVMe drives are supported. Both Direct drive access or drive behind a storage controller (such as RAID) are supported.
+The [check_smart](https://www.claudiokuenzler.com/monitoring-plugins/check_smart.php) plugin uses the `smartctl` command from the `smartmontools` package to monitor SMART values of physical drives. Hard, solid state and NVMe drives are supported. Both direct drive access or drives behind a storage controller (such as RAID) are supported.
 
 `smart_device` is required. `smart_interface` defaults to 'auto'. If `smart_device_is_glob` is set to true, a glob expression will be used for the given device(s) in `smart_device`.
 
@@ -2843,7 +2843,7 @@ smart_bad              | **Optional.** Threshold value (integer) when to warn fo
 smart_warn             | **Optional.** Comma separated list of thresholds for ATA drives (e.g. `"Reallocated_Sector_Ct=10,Current_Pending_Sector=62"`).
 smart_selftest         | **Optional.** If set to true, additionally check SMART's selftest log for errors.
 smart_ssd_lifetime     | **Optional.** If set to true, additionally check SSD attribute 'Percent_Lifetime_Remain'.
-smart_quiet            | **Optional.** If set to true, only show failing drive(s) when faults are detected (only affects output when used with `smart_global`).
+smart_quiet            | **Optional.** If set to true, only show failing drive(s) when faults are detected (only affects output when `smart_device_is_glob` is set to true).
 smart_skip_self_assessment | **Optional.** If set to true, skip the SMART self assessment health check (not recommended).
 
 
